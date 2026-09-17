@@ -1,11 +1,13 @@
 [plugin]
 enabled = true
-config_version = "0.1.0"
+config_version = "0.1.1"
 
 [chess]
 # 宿主 model_config.toml 中已配置的模型名称，留空使用 utils。
 model_name = ""
 request_timeout = 30
+# bot 选招单独限时，给思考型模型更多时间。
+move_timeout = 120
 idle_minutes = 30
 repetition = 3
 no_capture_halfmoves = 120

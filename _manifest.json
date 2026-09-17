@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "sky2002.xiangqi",
   "name": "LLM 中国象棋",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "群友通过中文棋谱、坐标或自然语言与 MaiBot 下中国象棋；LLM 选招，规则库裁判，图片棋盘。",
   "author": {"name": "sky2002", "url": "https://github.com/sky2002"},
   "license": "GPL-3.0-or-later",

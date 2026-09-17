@@ -210,3 +210,21 @@ async def test_no_capture_rule_finishes_game(service):
     assert "和棋" in service.store.get("s1").result
     await command(service, "悔棋")
     assert len(service.store.get("s1").moves) == 2
+
+
+async def test_wrapped_model_answer_completes_bot_turn(service):
+    service.ctx.llm.generate.return_value = {"success": True, "response": '我选择：\n```json\n{"id":1}\n```'}
+    await command(service, "开始")
+    await command(service, "炮八平五")
+    await drain(service)
+    assert len(service.store.get("s1").moves) == 2
+    assert "两次未能返回有效走法" not in said(service)
+
+
+async def test_timeout_message_preserves_player_move_and_identifies_timeout(service):
+    service.ctx.llm.generate.side_effect = TimeoutError()
+    await command(service, "开始")
+    await command(service, "炮八平五")
+    await drain(service)
+    assert service.store.get("s1").moves == ["b2e2"]
+    assert "超时" in said(service) and "下棋 重试" in said(service)
