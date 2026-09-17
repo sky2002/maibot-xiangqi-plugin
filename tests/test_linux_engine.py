@@ -3,13 +3,14 @@
 import asyncio
 import json
 import os
+import random
 import sys
 
 import pytest
 
 from xiangqi.config import EngineSection
 from xiangqi.difficulty import LEVELS
-from xiangqi.engine import Engine
+from xiangqi.engine import Engine, select_candidates
 from xiangqi.isolation import engine_command, topology
 from xiangqi.rules import Board
 
@@ -36,12 +37,25 @@ async def test_taskset_child_and_host_have_disjoint_physical_cores():
 
 
 @pytest.mark.parametrize("difficulty", LEVELS)
-async def test_real_isolated_engine_search(difficulty):
+async def test_real_isolated_engine_search(difficulty, monkeypatch):
     board = Board()
     engine = Engine()
+    evaluated = []
+
+    def select(ranked, settings):
+        evaluated[:] = ranked
+        return select_candidates(ranked, settings, random.Random(1))
+
+    monkeypatch.setattr("xiangqi.engine.select_candidates", select)
     for _ in range(2):
         result = await engine.analyse(board, EngineSection(difficulty=difficulty))
-        assert len(result) == 3 and all(c.choice.move in board.legal_moves() for c in result)
+        assert 1 <= len(result) <= 3 and all(c.choice.move in board.legal_moves() for c in result)
+        if difficulty >= 3:
+            assert len(result) == 3
+        else:
+            assert len(evaluated) == len(board.legal_moves())
+            if len(board.legal_moves()) == 44 and board.red_turn:
+                assert all(evaluated[0].score - c.score >= LEVELS[difficulty].min_loss for c in result)
         if LEVELS[difficulty].depth:
             assert all(c.depth <= LEVELS[difficulty].depth for c in result)
         board.push(result[0].choice.move)

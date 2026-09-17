@@ -1,4 +1,4 @@
-"""相对难度按实际搜索深度分档，不映射真人等级分。"""
+"""低档结合浅搜索和受控失误分档，不映射真人等级分。"""
 
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -8,11 +8,14 @@ from typing import Optional, Tuple
 class Difficulty:
     name: str
     depth: int  # 0 表示仅受部署者设置的搜索时间限制。
+    mistake_rate: float = 0
+    min_loss: int = 0
+    max_loss: int = 0
 
 
 LEVELS = {
-    1: Difficulty("入门", 1),
-    2: Difficulty("简单", 3),
+    1: Difficulty("入门", 1, 0.85, 100, 600),
+    2: Difficulty("简单", 2, 0.60, 50, 300),
     3: Difficulty("标准", 6),
     4: Difficulty("困难", 10),
     5: Difficulty("挑战", 0),

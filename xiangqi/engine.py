@@ -1,9 +1,10 @@
 """短时单线程 UCI 搜索；跨群串行，退出/取消时回收子进程。"""
 
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import asyncio
+import random
 import re
 
 from .config import EngineSection
@@ -33,6 +34,36 @@ class Candidate:
             "depth": self.depth,
             "pv": self.pv,
         }
+
+
+def select_candidates(
+    ranked: List[Candidate], settings: EngineSection, rng: Optional[random.Random] = None
+) -> List[Candidate]:
+    """先生成候选池再交给 LLM；失误回合不能从池中重新选回最优招。"""
+    spec = LEVELS[settings.difficulty]
+    normal = ranked[: settings.candidates]
+    rng = rng if rng is not None else random.SystemRandom()
+    if not ranked or not spec.mistake_rate:
+        return normal
+    safe = [c for c in ranked if not (c.score_kind == "mate" and c.score < 0)]
+    normal = (safe or ranked)[: settings.candidates]
+    if rng.random() >= spec.mistake_rate:
+        return normal
+    best = ranked[0]
+    # 不把 mate 当普通数值运算：有非败招时，不主动提供已被引擎判为强制输棋的招。
+    # 存在可杀时，允许错过杀棋、走另一条仍非强制输棋的路线。
+    finite = [c for c in ranked if c.score_kind == "cp"]
+    if best.score_kind == "mate":
+        pool = [c for c in finite if finite[0].score - c.score <= spec.max_loss] if best.score > 0 else []
+    else:
+        pool = [c for c in finite if spec.min_loss <= best.score - c.score <= spec.max_loss]
+        if not pool:
+            # 分数差距不足最低目标时仍可选较小失误；不为凑数强行超过损失上限。
+            pool = [c for c in finite if 0 < best.score - c.score <= spec.max_loss]
+    if not pool:
+        return normal
+    selected = {c.choice.move for c in rng.sample(pool, min(settings.candidates, len(pool)))}
+    return [c for c in ranked if c.choice.move in selected]
 
 
 def candidates_from_info(board: Board, lines: List[str], best: str, count: int) -> List[Candidate]:
@@ -112,7 +143,10 @@ async def search(command: List[str], board: Board, settings: EngineSection) -> L
                     raise EngineFailure("引擎不兼容，请安装官方 Fairy-Stockfish 14 largeboard")
             if not any(" var xiangqi" in line for line in handshake):
                 raise EngineFailure("引擎未包含象棋规则，请使用 largeboard 版本")
-            count = min(settings.candidates, len(board.legal_moves()))
+            spec = LEVELS[settings.difficulty]
+            legal_count = len(board.legal_moves())
+            # 低档必须评估最佳三招之外的着法，否则 LLM 总能从好棋里挑回强招。
+            count = legal_count if spec.mistake_rate else min(settings.candidates, legal_count)
             if not count:
                 raise EngineFailure("当前局面没有合法着法")
             for option, value in (
@@ -135,10 +169,11 @@ async def search(command: List[str], board: Board, settings: EngineSection) -> L
             fields = board.fen.split()
             fields[4] = "0"
             await send("position fen " + " ".join(fields))
-            depth = LEVELS[settings.difficulty].depth
+            depth = spec.depth
             await send(f"go movetime {settings.movetime_ms}" + (f" depth {depth}" if depth else ""))
             lines = await read_until("bestmove")
-            return candidates_from_info(board, lines, lines[-1].split()[1], count)
+            ranked = candidates_from_info(board, lines, lines[-1].split()[1], count)
+            return select_candidates(ranked, settings)
     except TimeoutError:
         raise EngineFailure("引擎响应超时，棋局已保留，请检查引擎安装后重试") from None
     except (OSError, ValueError, IndexError) as exc:

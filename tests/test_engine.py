@@ -2,13 +2,14 @@ from unittest.mock import AsyncMock
 
 import asyncio
 import os
+import random
 import sys
 
 import pytest
 
 from xiangqi.config import EngineSection
 from xiangqi.difficulty import LEVELS
-from xiangqi.engine import Engine, EngineFailure, candidates_from_info, search
+from xiangqi.engine import Engine, EngineFailure, candidates_from_info, search, select_candidates
 from xiangqi.rules import Board, native_move
 
 
@@ -101,8 +102,10 @@ async def test_real_engine_red_and_black_candidates(difficulty):
     board = Board()
     for _ in range(2):
         found = await search([os.environ["XIANGQI_TEST_ENGINE"]], board, EngineSection(difficulty=difficulty))
-        assert len(found) == 3
-        assert len({c.choice.move for c in found}) == 3
+        assert 1 <= len(found) <= 3
+        assert len({c.choice.move for c in found}) == len(found)
+        if difficulty >= 3:
+            assert len(found) == 3
         for c in found:
             if LEVELS[difficulty].depth:
                 assert c.depth <= LEVELS[difficulty].depth
@@ -111,3 +114,21 @@ async def test_real_engine_red_and_black_candidates(difficulty):
             for move in c.pv:
                 future.push(move)
         board.push(found[-1].choice.move)
+
+
+@pytest.mark.skipif(not os.environ.get("XIANGQI_TEST_ENGINE"), reason="可选真实引擎验证")
+@pytest.mark.parametrize("difficulty", [1, 2])
+async def test_real_handicap_can_offer_candidates_outside_old_top_three(difficulty, monkeypatch):
+    evaluated = []
+
+    def select(ranked, settings):
+        evaluated.extend(ranked)
+        return select_candidates(ranked, settings, random.Random(1))
+
+    monkeypatch.setattr("xiangqi.engine.select_candidates", select)
+    board = Board()
+    result = await search([os.environ["XIANGQI_TEST_ENGINE"]], board, EngineSection(difficulty=difficulty))
+    assert len(evaluated) == len(board.legal_moves())
+    assert all(c.score_kind == "cp" for c in result)
+    assert all(evaluated[0].score - c.score >= LEVELS[difficulty].min_loss for c in result)
+    assert not {c.choice.move for c in result} & {c.choice.move for c in evaluated[:3]}
