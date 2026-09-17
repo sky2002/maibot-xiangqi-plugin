@@ -7,6 +7,7 @@ import asyncio
 import re
 
 from .config import EngineSection
+from .difficulty import LEVELS
 from .isolation import IsolationError, engine_command
 from .rules import Board, Choice, public_move
 
@@ -121,6 +122,10 @@ async def search(command: List[str], board: Board, settings: EngineSection) -> L
                 ("UCI_Variant", "xiangqi"),
                 ("Use NNUE", "false"),
                 ("Ponder", "false"),
+                # Skill Level 主要改写最终 bestmove；此处从 MultiPV 交给 LLM 选招，
+                # 所以通过真正限制搜索深度调级，不依赖 bestmove 的随机降强。
+                ("Skill Level", 20),
+                ("UCI_LimitStrength", "false"),
             ):
                 await send(f"setoption name {option} value {value}")
             await send("ucinewgame")
@@ -130,7 +135,8 @@ async def search(command: List[str], board: Board, settings: EngineSection) -> L
             fields = board.fen.split()
             fields[4] = "0"
             await send("position fen " + " ".join(fields))
-            await send(f"go movetime {settings.movetime_ms}")
+            depth = LEVELS[settings.difficulty].depth
+            await send(f"go movetime {settings.movetime_ms}" + (f" depth {depth}" if depth else ""))
             lines = await read_until("bestmove")
             return candidates_from_info(board, lines, lines[-1].split()[1], count)
     except TimeoutError:

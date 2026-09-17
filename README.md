@@ -56,7 +56,7 @@ uv pip install --python .venv/bin/python -r plugins/maibot-xiangqi-plugin/requir
 
 ### i7-7700 的 CPU 隔离
 
-默认 `Threads=1`、64 MB 哈希表、每步搜索 800ms、最多 3 个候选。多个群共用串行搜索，不会一群开一个搜索同时抢占 CPU；等待 LLM 时没有后台引擎搜索。64 MB 是哈希表大小，进程总内存会更高。
+默认 `Threads=1`、64 MB 哈希表、每步搜索上限 800ms、最多 3 个候选；低难度达到深度上限会提前结束。多个群共用串行搜索，不会一群开一个搜索同时抢占 CPU；等待 LLM 时没有后台引擎搜索。64 MB 是哈希表大小，进程总内存会更高。
 
 启动器读取 Linux 的 `thread_siblings_list` 和允许使用的 CPU 集合，为引擎预留一个**完整物理核心**，引擎只使用其中一个逻辑 CPU，MaiBot、uv 和插件 runner 继承其余核心的亲和性。正常启用全部核心的 i7-7700 上相当于 MaiBot 使用 3 个物理核心、引擎使用 1 个；不假定逻辑 CPU 编号连续。
 
@@ -85,6 +85,9 @@ uv pip install --python .venv/bin/python -r plugins/maibot-xiangqi-plugin/requir
 | --- | --- |
 | `下棋 开始` / `下棋 开始 红` | 发起者执红先走 |
 | `下棋 开始 黑` | 发起者执黑，bot 执红先走 |
+| `下棋 开始 黑 简单` / `下棋 开始 红 2` | 开局选择难度，颜色可省略 |
+| `下棋 难度` | 查看本局难度；没有棋局时查看新局默认值 |
+| `下棋 难度 简单` / `下棋 难度 2` | 发起者调整本局难度，从下一次搜索生效 |
 | `下棋 炮八平五` | 中文棋谱；数字和常见繁体字也支持 |
 | `下棋 前车平八` | 支持前/后/中棋子；仍有歧义时列候选 |
 | `下棋 b2 e2` / `下棋 b2e2` | 固定棋盘坐标 |
@@ -102,6 +105,34 @@ uv pip install --python .venv/bin/python -r plugins/maibot-xiangqi-plugin/requir
 每群同时一盘，绑定发起者账号。围观者只能查看棋盘，不能落子、悔棋、确认候选或重试。查看棋盘和无效指令不延长占桌时间。思考或解析期间拒绝新的落子和悔棋，仍允许发起者认输、管理员结束。
 
 自然语言只用于解析本条落子意图，不能替玩家推荐或选择好棋。语义含糊时会列出候选或要求补充；LLM 的语义判断仍可能有误，精确操作建议使用棋谱或坐标。
+
+## 难度与棋力
+
+当前引擎为 Fairy-Stockfish 14 largeboard 的传统评估版，关闭 NNUE，单线程短时搜索后再让 LLM 选招。没有做真人对局评级，**不能把它标成某个天天象棋段位、职业等级或准确 Elo**。[官方对 14.0.1 XQ 的介绍](https://fairy-stockfish.github.io/release/2021/11/19/fairy-stockfish-14-0-1.html) 中的超人类棋力指向 NNUE 版本，不是本插件的当前配置。
+
+[官方棋力说明](https://github.com/fairy-stockfish/Fairy-Stockfish/wiki/Playing-strength#xiangqi) 将传统评估版的象棋能力描述为至少 master level，略高于象眼及 Cyclone 0.55。这是对引擎的概括，不能视为本插件在 800ms 搜索及 LLM 选招条件下的真人等级认证。
+
+| 档位 | 名称 | 搜索深度上限 |
+| --- | --- | --- |
+| 1 | 入门 | 1 |
+| 2 | 简单 | 3 |
+| 3 | 标准（新局默认） | 6 |
+| 4 | 困难 | 10 |
+| 5 | 挑战（升级前的搜索方式） | 不额外限制深度 |
+
+五档是相对搜索强度，不是经标定的人类水平。更高档允许搜索更深，但具体局面、机器速度、时间预算和 LLM 的选择都会影响实际表现，不保证每一步都比低档好，也不保证入门档适合所有初学者。深度指引擎的搜索迭代深度，不能直接理解为完整算清这么多回合。所有档位仍受 `engine.movetime_ms` 上限约束，不会突破单核隔离或增加搜索线程。
+
+在群里直接使用：
+
+```text
+下棋 开始 简单
+下棋 难度
+下棋 难度 4
+```
+
+只有棋局发起者可以调整，思考或解析走法时需等待。难度只影响下一次引擎搜索，不改棋谱、不触发落子、不延长占桌时限；普通聊天不能修改难度。设定随棋局保存，重启后保留，不影响其他群。新开局采用配置默认值或开局指令指定值；旧存档缺少难度字段时按挑战档继续，保持升级前的行为。纯 LLM 模式不提供引擎难度调节。
+
+实现采用 `go depth` 配合原来的时间上限，让提供给 LLM 的候选本身来自不同深度的搜索。[引擎源码中的 Skill Level](https://github.com/fairy-stockfish/Fairy-Stockfish/blob/fairy_sf_14/src/search.cpp) 会在搜索结束后将次优着法换成最终推荐；我们从 MultiPV 交给 LLM 选招，所以不依靠这个最终推荐的降强机制，也不展示未经象棋标定的 UCI_Elo。
 
 ## 配置
 
@@ -125,6 +156,7 @@ uv pip install --python .venv/bin/python -r plugins/maibot-xiangqi-plugin/requir
 | 字段（`[engine]`） | 默认 | 含义 |
 | --- | --- | --- |
 | `enabled` | `true` | 混合模式；明确设为 `false` 才使用旧纯 LLM 模式 |
+| `difficulty` | `3` | 新局默认难度 1–5；已有棋局保持已保存的难度 |
 | `executable` | `""` | 留空用安装器路径；可指定绝对路径的兼容 Fairy-Stockfish largeboard |
 | `candidates` | `3` | 交给 LLM 的候选数，1–5，合法走法不足时减少 |
 | `movetime_ms` | `800` | 搜索毫秒数，100–3000；不包含排队、进程启动与 LLM 请求 |
@@ -184,6 +216,8 @@ uv pip install --python .venv/bin/python -r plugins/maibot-xiangqi-plugin/requir
 ```
 
 从 0.1.x 升级到 0.2.0 后默认启用引擎：还需执行上面的 `install_engine.py`，并通过 `run_isolated.py` 重启。若暂时沿用旧模式，明确设置 `[engine] enabled = false`。插件运行数据位于 SDK 的数据目录，更新源码不会覆盖存档。
+
+从 0.2.x 升级到 0.3.0 不需要重新安装引擎或额外依赖，拉取代码后按原隔离命令重启即可。新局默认标准档，旧棋局按挑战档继续；可用「下棋 难度」查看或调整。
 
 ## 开发验证
 

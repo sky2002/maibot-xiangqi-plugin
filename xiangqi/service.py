@@ -8,6 +8,7 @@ import base64
 import time
 
 from .config import ChessSection, EngineSection
+from .difficulty import LEVELS, label, opening, parse_level
 from .engine import Engine, EngineFailure
 from .llm import ModelFailure, Player
 from .render import render_board
@@ -16,7 +17,9 @@ from .store import Game, Store
 
 
 HELP = """中国象棋 · 每群一盘，只有发起者可以落子
-下棋 开始 [红|黑]：默认执红，标准开局
+下棋 开始 [红|黑] [难度]：例如「下棋 开始 黑 简单」
+下棋 难度：查看本局难度；「下棋 难度 2」由棋手调整
+难度：1入门、2简单、3标准、4困难、5挑战；不是等级分
 下棋 炮八平五：中文棋谱（支持前车、后马等）
 下棋 b2 e2：固定坐标，红方在下，a0 左下、i9 右上
 下棋 把b2的炮移到e2：自然语言，歧义时让你选择
@@ -78,6 +81,7 @@ class Service:
             and current.id == snapshot.id
             and current.moves == snapshot.moves
             and current.result == snapshot.result
+            and current.difficulty == snapshot.difficulty
         )
 
     async def _text(self, stream_id: str, text: str) -> None:
@@ -98,6 +102,7 @@ class Service:
         if sent is False:
             raise RuntimeError("发送棋盘失败")
         status = game.result if game.result else "轮到 maibot。" if game.bot_turn else "轮到你走。"
+        status += f" 难度：{label(game.difficulty)}。" if self.engine_settings.enabled else " 纯 LLM 模式。"
         if position.board.in_check and not game.result:
             status += "将军！"
         await self._text(game.stream_id, "\n".join(x for x in (message, status) if x))
@@ -161,7 +166,9 @@ class Service:
         try:
             board = snapshot.position().board
             if self.engine_settings.enabled:
-                candidates = await self.engine.analyse(board, self.engine_settings.model_copy(deep=True))
+                engine_settings = self.engine_settings.model_copy(deep=True)
+                engine_settings.difficulty = snapshot.difficulty
+                candidates = await self.engine.analyse(board, engine_settings)
                 if not self._same(snapshot):
                     return
                 choice = await player.select(board, list(snapshot.moves), candidates)
@@ -316,7 +323,12 @@ class Service:
             if game and not game.result and time.time() - game.updated_at >= game.idle_seconds:
                 self._end(game, "空闲超时，对局结束，不计胜负。")
                 await self._text(stream_id, game.result)
-            if command in ("开始", "开始 红", "开始 黑", "开始 红方", "开始 黑方"):
+            if command.split()[0] == "开始":
+                try:
+                    human_red, difficulty = opening(command, self.engine_settings.difficulty)
+                except ValueError as exc:
+                    await self._text(stream_id, str(exc))
+                    return
                 if game and not game.result:
                     await self._text(stream_id, "本群已有一盘棋，结束后才能重新开始。可用「下棋 棋盘」查看。")
                     return
@@ -325,7 +337,8 @@ class Service:
                     platform,
                     group_id,
                     user_id,
-                    human_red="黑" not in command,
+                    human_red=human_red,
+                    difficulty=difficulty,
                     repetition=self.settings.repetition,
                     no_capture_limit=self.settings.no_capture_halfmoves,
                     idle_seconds=self.settings.idle_minutes * 60,
@@ -338,6 +351,23 @@ class Service:
                 )
                 if game.bot_turn:
                     self._launch(game, self._bot(game, "maibot 执红先走，思考中……"))
+                return
+            if command == "难度":
+                levels = "、".join(label(level) for level in LEVELS)
+                current = (
+                    f"本局难度：{label(game.difficulty)}。"
+                    if game
+                    else f"新局默认难度：{label(self.engine_settings.difficulty)}。"
+                )
+                mode = (
+                    ""
+                    if self.engine_settings.enabled
+                    else "当前是纯 LLM 模式，难度限制仅在启用引擎时生效。\n"
+                )
+                await self._text(
+                    stream_id,
+                    f"{mode}{current}\n可选：{levels}。\n发起者可用「下棋 难度 简单」调整，正在思考时需等待；从下一次搜索生效。",
+                )
                 return
             if not game:
                 await self._text(stream_id, "本群还没有棋局，请发送「下棋 开始」。")
@@ -370,7 +400,25 @@ class Service:
                 await self._show(game)
                 return
             if stream_id in self.jobs:
-                await self._text(stream_id, "正在处理上一条走法，请稍候。思考期间不能落子或悔棋。")
+                await self._text(stream_id, "正在处理上一条走法，请稍候。思考期间不能落子、悔棋或调整难度。")
+                return
+            if command.split()[0] == "难度":
+                if not self.engine_settings.enabled:
+                    await self._text(stream_id, "当前是纯 LLM 模式，请由部署者启用引擎后再调难度。")
+                    return
+                parts = command.split()
+                difficulty = parse_level(parts[1]) if len(parts) == 2 else None
+                if difficulty is None:
+                    await self._text(
+                        stream_id, "难度请选择 1–5 或入门、简单、标准、困难、挑战，例如「下棋 难度 2」。"
+                    )
+                    return
+                game.difficulty = difficulty
+                self.store.save(game)
+                self.analysis.pop(stream_id, None)
+                await self._text(
+                    stream_id, f"本局难度已设为 {label(difficulty)}，从下一次 bot 搜索生效；棋谱保持不变。"
+                )
                 return
             if command == "悔棋":
                 human_indices = [i for i in range(len(game.moves)) if (i % 2 == 0) == game.human_red]

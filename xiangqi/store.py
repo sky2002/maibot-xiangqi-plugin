@@ -27,6 +27,8 @@ class Game:
     repetition: int = 3
     no_capture_limit: int = 120
     idle_seconds: int = 1800
+    # 旧存档缺省为挑战，保持升级前只有时间限制的搜索方式。
+    difficulty: int = 5
 
     def position(self) -> Position:
         return replay(self.moves)

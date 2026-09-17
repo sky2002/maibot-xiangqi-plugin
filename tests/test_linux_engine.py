@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from xiangqi.config import EngineSection
+from xiangqi.difficulty import LEVELS
 from xiangqi.engine import Engine
 from xiangqi.isolation import engine_command, topology
 from xiangqi.rules import Board
@@ -34,10 +35,13 @@ async def test_taskset_child_and_host_have_disjoint_physical_cores():
     assert json.loads(stdout) == [cpu]
 
 
-async def test_real_isolated_engine_search():
+@pytest.mark.parametrize("difficulty", LEVELS)
+async def test_real_isolated_engine_search(difficulty):
     board = Board()
     engine = Engine()
     for _ in range(2):
-        result = await engine.analyse(board, EngineSection())
+        result = await engine.analyse(board, EngineSection(difficulty=difficulty))
         assert len(result) == 3 and all(c.choice.move in board.legal_moves() for c in result)
+        if LEVELS[difficulty].depth:
+            assert all(c.depth <= LEVELS[difficulty].depth for c in result)
         board.push(result[0].choice.move)

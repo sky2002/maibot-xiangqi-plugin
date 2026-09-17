@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from xiangqi.config import EngineSection
+from xiangqi.difficulty import LEVELS
 from xiangqi.engine import Engine, EngineFailure, candidates_from_info, search
 from xiangqi.rules import Board, native_move
 
@@ -95,13 +96,16 @@ async def test_cancel_kills_and_reaps_engine(monkeypatch):
 
 
 @pytest.mark.skipif(not os.environ.get("XIANGQI_TEST_ENGINE"), reason="可选真实引擎验证")
-async def test_real_engine_red_and_black_candidates():
+@pytest.mark.parametrize("difficulty", LEVELS)
+async def test_real_engine_red_and_black_candidates(difficulty):
     board = Board()
     for _ in range(2):
-        found = await search([os.environ["XIANGQI_TEST_ENGINE"]], board, EngineSection())
+        found = await search([os.environ["XIANGQI_TEST_ENGINE"]], board, EngineSection(difficulty=difficulty))
         assert len(found) == 3
         assert len({c.choice.move for c in found}) == 3
         for c in found:
+            if LEVELS[difficulty].depth:
+                assert c.depth <= LEVELS[difficulty].depth
             assert c.choice.move in board.legal_moves()
             future = Board(board.fen)
             for move in c.pv:

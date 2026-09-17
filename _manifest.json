@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "sky2002.xiangqi",
   "name": "LLM 中国象棋",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "群友与 MaiBot 下中国象棋；单核隔离引擎给候选，LLM 拍板、自动解说和聊天，规则库裁判。",
   "author": {"name": "sky2002", "url": "https://github.com/sky2002"},
   "license": "GPL-3.0-or-later",
