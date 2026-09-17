@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from xiangqi.config import ChessSection
+from xiangqi.config import ChessSection, EngineSection
 from xiangqi.service import Service
 
 
@@ -19,7 +19,7 @@ async def service(tmp_path, monkeypatch):
         config=SimpleNamespace(get=AsyncMock(return_value="")),
         llm=SimpleNamespace(generate=AsyncMock(return_value={"success": True, "response": '{"id": 1}'})),
     )
-    instance = Service(ctx, tmp_path, ChessSection(commentary=False))
+    instance = Service(ctx, tmp_path, ChessSection(commentary=False), EngineSection(enabled=False))
     await instance.start()
     yield instance
     await instance.close()

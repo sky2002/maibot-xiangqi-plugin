@@ -40,11 +40,16 @@ async def test_sdk_entry_command_lifecycle(tmp_path):
         paths=SimpleNamespace(data_dir=tmp_path),
         logger=logging.getLogger("entry-test"),
         send=SimpleNamespace(text=AsyncMock(return_value=True), image=AsyncMock(return_value=True)),
+        config=SimpleNamespace(get=AsyncMock(return_value="")),
+        llm=SimpleNamespace(
+            generate=AsyncMock(return_value={"success": True, "response": '{"reply":"先看看中路。"}'})
+        ),
     )
     plugin._set_context(ctx)
     components = plugin.get_components()
-    assert len(components) == 1
-    pattern = components[0]["metadata"]["command_pattern"]
+    assert len(components) == 2
+    command = next(c for c in components if "command_pattern" in c["metadata"])
+    pattern = command["metadata"]["command_pattern"]
     assert re.fullmatch(pattern, "下棋 炮八平五")
     assert not re.fullmatch(pattern, "他刚说下棋 炮八平五")
     await plugin.on_load()
@@ -60,6 +65,17 @@ async def test_sdk_entry_command_lifecycle(tmp_path):
         assert result == (True, "象棋指令已处理", True)
         assert plugin.service.store.get("s1").owner == "u1"
         ctx.send.image.assert_awaited_once()
+        hook_reply = await plugin.handle_chat(
+            message={
+                "session_id": "s1",
+                "platform": "qq",
+                "message_id": "chat1",
+                "message_info": {"group_info": {"group_id": "g1"}, "user_info": {"user_id": "u1"}},
+                "processed_plain_text": "这步为什么这么走？",
+            }
+        )
+        assert hook_reply == {"action": "abort"}
+        assert plugin.service.store.get("s1").moves == []
     finally:
         await plugin.on_unload()
 

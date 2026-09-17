@@ -2,7 +2,8 @@
 
 from typing import Any, Dict, Optional
 
-from maibot_sdk import Command, MaiBotPlugin
+from maibot_sdk import Command, HookHandler, MaiBotPlugin
+from maibot_sdk.types import ErrorPolicy, HookMode
 
 from .xiangqi.config import Config
 from .xiangqi.service import Service
@@ -16,7 +17,7 @@ class XiangqiPlugin(MaiBotPlugin):
         self.service: Optional[Service] = None
 
     async def on_load(self) -> None:
-        self.service = Service(self.ctx, self.ctx.paths.data_dir, self.config.chess)
+        self.service = Service(self.ctx, self.ctx.paths.data_dir, self.config.chess, self.config.engine)
         await self.service.start()
 
     async def on_unload(self) -> None:
@@ -27,6 +28,37 @@ class XiangqiPlugin(MaiBotPlugin):
     async def on_config_update(self, scope: str, config_data: Dict[str, object], version: str) -> None:
         if self.service:
             self.service.settings = self.config.chess
+            self.service.engine_settings = self.config.engine
+
+    @HookHandler(
+        "chat.receive.after_process",
+        name="xiangqi_auto_chat",
+        mode=HookMode.BLOCKING,
+        timeout_ms=20000,
+        error_policy=ErrorPolicy.SKIP,
+        description="对局中自动回应棋手的棋局聊天",
+    )
+    async def handle_chat(self, message=None, **kwargs: Any):
+        if not self.config.plugin.enabled or self.service is None or not isinstance(message, dict):
+            return {"action": "continue"}
+        if message.get("is_command") or message.get("is_notify"):
+            return {"action": "continue"}
+        info = message.get("message_info")
+        if not isinstance(info, dict):
+            return {"action": "continue"}
+        group, user = info.get("group_info"), info.get("user_info")
+        text = message.get("processed_plain_text")
+        if not isinstance(group, dict) or not isinstance(user, dict) or not isinstance(text, str):
+            return {"action": "continue"}
+        replied = await self.service.chat(
+            str(message.get("session_id") or ""),
+            str(group.get("group_id") or ""),
+            str(message.get("platform") or ""),
+            str(user.get("user_id") or ""),
+            text,
+            str(message.get("message_id") or ""),
+        )
+        return {"action": "abort" if replied else "continue"}
 
     @Command(
         "xiangqi",

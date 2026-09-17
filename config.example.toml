@@ -1,6 +1,6 @@
 [plugin]
 enabled = true
-config_version = "0.1.1"
+config_version = "0.2.0"
 
 [chess]
 # 宿主 model_config.toml 中已配置的模型名称，留空使用 utils。
@@ -12,5 +12,16 @@ idle_minutes = 30
 repetition = 3
 no_capture_halfmoves = 120
 commentary = true
+auto_chat = true
+chat_cooldown = 15
 # 本群管理员名单，逐群授权；例如 ["qq:123456:987654"]。
 admins = []
+
+[engine]
+# 默认启用：需要安装引擎，并经 run_isolated.py 启动 MaiBot。
+# 设为 false 可明确使用旧的纯 LLM 模式；引擎故障不会自动降级。
+enabled = true
+executable = ""
+candidates = 3
+movetime_ms = 800
+hash_mb = 64

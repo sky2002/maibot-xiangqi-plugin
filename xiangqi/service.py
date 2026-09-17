@@ -7,7 +7,8 @@ import asyncio
 import base64
 import time
 
-from .config import ChessSection
+from .config import ChessSection, EngineSection
+from .engine import Engine, EngineFailure
 from .llm import ModelFailure, Player
 from .render import render_board
 from .rules import Choice, outcome
@@ -25,15 +26,27 @@ HELP = """中国象棋 · 每群一盘，只有发起者可以落子
 下棋 重试：bot 选招失败后继续
 下棋 认输：发起者结束棋局
 下棋 结束：已配置的本群管理员强制结束，不计胜负
-LLM 负责选招，程序检查合法性。超时或非法输出重试一次，仍失败保留棋局。
+默认引擎提供候选、LLM 拍板，程序检查合法性。失败保留棋局，不自动代选。
+bot 落子后自动解说；棋手直接聊本局即可，无需聊天指令。聊天不会落子。
 采用简化和棋规则：重复局面或连续无吃子达到阈值即和棋，长将长捉不单独判责。
 对局支持重启续玩；空闲超时结束，不计胜负。结束后可看最后棋盘，不能悔棋。"""
 
 
 class Service:
-    def __init__(self, ctx: Any, data_dir: Path, settings: ChessSection):
+    def __init__(
+        self,
+        ctx: Any,
+        data_dir: Path,
+        settings: ChessSection,
+        engine_settings: Optional[EngineSection] = None,
+    ):
         self.ctx = ctx
         self.settings = settings
+        self.engine_settings = engine_settings or EngineSection()
+        self.engine = Engine()
+        self.analysis: Dict[str, Tuple[str, Tuple[str, ...], Dict[str, Any]]] = {}
+        self.chat_last: Dict[str, float] = {}
+        self.chat_busy: Set[str] = set()
         self.store = Store(data_dir / "xiangqi.sqlite3")
         self.jobs: Dict[str, asyncio.Task] = {}
         self.tasks: Set[asyncio.Task] = set()
@@ -144,9 +157,22 @@ class Service:
     async def _bot(self, snapshot: Game, notice: str) -> None:
         await self._text(snapshot.stream_id, notice)
         player = Player(self.ctx, self.settings.model_copy(deep=True))
+        evidence = None
         try:
-            choice = await player.select(snapshot.position().board, list(snapshot.moves))
-        except ModelFailure as exc:
+            board = snapshot.position().board
+            if self.engine_settings.enabled:
+                candidates = await self.engine.analyse(board, self.engine_settings.model_copy(deep=True))
+                if not self._same(snapshot):
+                    return
+                choice = await player.select(board, list(snapshot.moves), candidates)
+                evidence = {
+                    "side": "红" if board.red_turn else "黑",
+                    "fen": board.fen,
+                    "selected": next(c.evidence() for c in candidates if c.choice.move == choice.move),
+                }
+            else:
+                choice = await player.select(board, list(snapshot.moves))
+        except (ModelFailure, EngineFailure) as exc:
             if self._same(snapshot):
                 await self._show(snapshot, f"{exc} 已保留当前局面，请发送「下棋 重试」。")
             return
@@ -154,6 +180,8 @@ class Service:
         if not self._same(snapshot):
             return
         self._apply_move(snapshot, choice)
+        if evidence:
+            self.analysis[snapshot.stream_id] = (snapshot.id, tuple(snapshot.moves), evidence)
         await self._show(snapshot, f"maibot：{choice.notation}（{choice.move[:2]} → {choice.move[2:]}）。")
         if player.settings.commentary:
             task = asyncio.create_task(self._comment(snapshot, choice, player))
@@ -162,13 +190,67 @@ class Service:
 
     async def _comment(self, game: Game, choice: Choice, player: Player) -> None:
         try:
-            text = await player.comment(game.position().board, choice)
+            text = await player.comment(game.position().board, choice, self._evidence(game))
             if text and self._same(game):
                 await self._text(game.stream_id, text)
         except asyncio.CancelledError:
             raise
         except Exception:
             self.ctx.logger.warning("本轮棋评生成或发送失败，落子与棋盘不受影响。")
+
+    def _evidence(self, game: Game) -> Optional[Dict[str, Any]]:
+        saved = self.analysis.get(game.stream_id)
+        return saved[2] if saved and saved[:2] == (game.id, tuple(game.moves)) else None
+
+    async def chat(
+        self, stream_id: str, group_id: str, platform: str, user_id: str, text: str, message_id: str = ""
+    ) -> bool:
+        """只有成功发送了本局聊天回复才拦截普通回复；从不更改棋谱。"""
+        text = text.strip()
+        if (
+            not self.settings.auto_chat
+            or not text
+            or len(text) > 300
+            or text.startswith(("下棋", "/", "!", "！"))
+        ):
+            return False
+        game = self.store.get(stream_id)
+        if (
+            not group_id
+            or not user_id
+            or not platform
+            or not game
+            or game.result
+            or (game.platform, game.group_id, game.owner) != (platform, group_id, user_id)
+            or time.time() - game.updated_at >= game.idle_seconds
+        ):
+            return False
+        now = time.monotonic()
+        if (
+            stream_id in self.chat_busy
+            or now - self.chat_last.get(stream_id, -float("inf")) < self.settings.chat_cooldown
+        ):
+            return False
+        if not self.store.claim_message(stream_id, message_id):
+            return False
+        self.chat_last[stream_id] = now
+        self.chat_busy.add(stream_id)
+        task = asyncio.current_task()
+        self.aux.add(task)
+        try:
+            player = Player(self.ctx, self.settings.model_copy(deep=True))
+            reply = await player.chat(game.position().board, text, game.human_red, self._evidence(game))
+            if reply and self._same(game):
+                await self._text(stream_id, reply)
+                return True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.ctx.logger.warning("象棋自动聊天未完成，继续普通聊天处理。")
+        finally:
+            self.chat_busy.discard(stream_id)
+            self.aux.discard(task)
+        return False
 
     async def _candidates(self, game: Game, choices: List[Choice]) -> None:
         if not choices:
