@@ -1,0 +1,24 @@
+{
+  "manifest_version": 2,
+  "id": "sky2002.xiangqi",
+  "name": "LLM 中国象棋",
+  "version": "0.1.0",
+  "description": "群友通过中文棋谱、坐标或自然语言与 MaiBot 下中国象棋；LLM 选招，规则库裁判，图片棋盘。",
+  "author": {"name": "sky2002", "url": "https://github.com/sky2002"},
+  "license": "GPL-3.0-or-later",
+  "urls": {
+    "repository": "https://github.com/sky2002/maibot-xiangqi-plugin",
+    "homepage": "https://github.com/sky2002/maibot-xiangqi-plugin",
+    "documentation": "https://github.com/sky2002/maibot-xiangqi-plugin#readme",
+    "issues": "https://github.com/sky2002/maibot-xiangqi-plugin/issues"
+  },
+  "host_application": {"min_version": "1.2.5", "max_version": "1.2.99"},
+  "sdk": {"min_version": "2.8.1", "max_version": "2.99.99"},
+  "dependencies": [
+    {"type": "python_package", "name": "pyffish", "version_spec": "==0.0.90"},
+    {"type": "python_package", "name": "Pillow", "version_spec": ">=12.3.0,<13"}
+  ],
+  "capabilities": ["send.text", "send.image", "llm.generate", "config.get"],
+  "i18n": {"default_locale": "zh-CN", "locales_path": "_locales", "supported_locales": ["zh-CN"]},
+  "changelog": "CHANGELOG.md"
+}

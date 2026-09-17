@@ -1,0 +1,27 @@
+[project]
+name = "maibot-xiangqi-plugin"
+version = "0.1.0"
+description = "让群友通过棋谱、坐标和自然语言与 MaiBot 的 LLM 下中国象棋"
+requires-python = ">=3.12"
+license = "GPL-3.0-or-later"
+dependencies = [
+    "maibot-plugin-sdk>=2.8.1,<3",
+    "pyffish==0.0.90",
+    "Pillow>=12.3.0,<13",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.12,<1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "ASYNC"]
+ignore = ["E501"]
