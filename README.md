@@ -39,6 +39,8 @@ uv pip install --python .venv/bin/python -r plugins/maibot-xiangqi-plugin/requir
 .venv/bin/python plugins/maibot-xiangqi-plugin/scripts/run_isolated.py -- uv run --no-sync bot.py
 ```
 
+如果出现 `FileNotFoundError: ... /snap/bin/uv`，说明启动器未能执行 uv。这个路径可能只是 PATH 搜索的最后一项，不一定表示安装了 Snap 版 uv。只要现有 `.venv` 已装好宿主及插件依赖，就使用上面的 `.venv/bin/python ... -- .venv/bin/python bot.py` 命令，无需安装 uv，也不会失去 CPU 隔离。0.2.1 起会提前检查启动命令，并在无法启动时给出明确提示。
+
 `--` 后面是原来的启动命令和参数；若入口不是 `bot.py`，替换为实际入口。`--no-sync` 避免 uv 清理额外安装的插件依赖。**不要同时保留原来未隔离的 MaiBot 进程。** 安装与启动使用同一 Linux 用户，不需要 sudo。安装器只支持 Linux x86_64，从官方发布下载约 2.5 MB 的固定引擎并核验 SHA256，默认放在 `~/.local/share/maibot-xiangqi/`（遵循 `XDG_DATA_HOME`）。
 
 在插件管理页确认「LLM 中国象棋」已加载并启用，授予其声明的 `send.text`、`send.image`、`llm.generate`、`config.get` 能力。SDK 会生成插件 `config.toml`，默认启用。宿主 `utils` 任务需要已有可用模型。
