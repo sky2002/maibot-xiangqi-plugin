@@ -5,15 +5,11 @@ from maibot_sdk import Field, PluginConfigBase
 
 class PluginSection(PluginConfigBase):
     enabled: bool = Field(default=True, description="启用中国象棋插件")
-    config_version: str = Field(default="0.4.1", description="配置版本")
+    config_version: str = Field(default="0.5.0", description="配置版本")
 
 
 class ChessSection(PluginConfigBase):
-    model_name: str = Field(default="", description="下棋模型名称，留空使用宿主 utils；不是 API 密钥")
     request_timeout: float = Field(default=30, ge=1, le=300, description="自然语言解析请求的超时秒数")
-    move_timeout: float = Field(
-        default=120, ge=1, le=300, description="每次 bot 选招请求的超时秒数，思考型模型可适当增加"
-    )
     idle_minutes: int = Field(default=30, ge=1, le=10080, description="无有效操作多少分钟后结束，不计胜负")
     repetition: int = Field(default=3, ge=2, le=10, description="相同局面出现几次后和棋")
     no_capture_halfmoves: int = Field(default=120, ge=2, le=1000, description="连续多少个半回合无吃子后和棋")
@@ -26,18 +22,17 @@ class ChessSection(PluginConfigBase):
 
 
 class EngineSection(PluginConfigBase):
-    enabled: bool = Field(default=True, description="引擎给候选、LLM 拍板；关闭后使用原纯 LLM 模式")
+    enabled: bool = Field(default=True, description="启用引擎自动落子；关闭后保留棋局，不使用 LLM 代走")
     difficulty: int = Field(
         default=3,
         ge=1,
         le=6,
-        description="新局默认难度：1入门、2简单、3标准、4困难、5挑战、6超人类；名称不是等级认证",
+        description="新局默认难度：1入门、2简单、3标准、4困难、5挑战、6全力；名称不是等级认证",
     )
     executable: str = Field(
         default="", description="Fairy-Stockfish largeboard 路径，留空自动使用插件内置引擎"
     )
     cpu: int = Field(default=-1, ge=-1, description="引擎逻辑 CPU，-1 自动选择；不限制 MaiBot 使用该核心")
-    candidates: int = Field(default=3, ge=1, le=5, description="交给 LLM 的引擎候选数")
     movetime_ms: int = Field(default=800, ge=100, le=3000, description="单次搜索毫秒数；所有群共用串行搜索")
     hash_mb: int = Field(default=64, ge=16, le=256, description="引擎哈希表 MB；不等于进程总内存")
 

@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from xiangqi.config import ChessSection, EngineSection
+from xiangqi.engine import EngineMove
 from xiangqi.service import Service
 
 
@@ -43,7 +44,7 @@ for line in sys.stdin:
         output.write(f"{os.getpid()} {line}\\n")
     if line == "uci":
         if mode != "bad":
-            for name in ("Threads", "Hash", "MultiPV", "UCI_Variant", "Use NNUE"):
+            for name in ("Threads", "Hash", "MultiPV", "UCI_Variant", "Use NNUE", "Skill Level", "UCI_LimitStrength"):
                 print(f"option name {name} type combo var xiangqi")
         print("uciok", flush=True)
     elif line == "isready":
@@ -54,7 +55,7 @@ for line in sys.stdin:
         if mode == "crash":
             sys.exit(1)
         print("info depth 1 multipv 1 score cp 25 nodes 1 pv b1c3")
-        print("bestmove b1c3", flush=True)
+        print("bestmove h1g3" if mode == "weaker" else "bestmove b1c3", flush=True)
 """,
         encoding="utf-8",
     )
@@ -77,5 +78,11 @@ async def service(tmp_path, monkeypatch):
     )
     instance = Service(ctx, tmp_path, ChessSection(commentary=False), EngineSection(enabled=False))
     await instance.start()
+    instance.engine_settings.enabled = True
+
+    async def choose(board, settings):
+        return EngineMove(board.choices()[0])
+
+    instance.engine.analyse = AsyncMock(side_effect=choose)
     yield instance
     await instance.close()

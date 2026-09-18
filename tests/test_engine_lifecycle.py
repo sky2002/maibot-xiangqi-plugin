@@ -14,14 +14,14 @@ def engine(monkeypatch, fake_uci):
 
 
 async def test_start_search_reuse_and_close(engine, child_processes, tmp_path):
-    settings = EngineSection(candidates=1, difficulty=6)
+    settings = EngineSection(difficulty=6)
     await engine.start(settings)
     try:
         assert len(child_processes) == 1 and child_processes[0].returncode is None
         await engine.start(settings)
         for _ in range(2):
             result = await engine.analyse(Board(), settings)
-            assert result[0].choice.move == "b0c2"
+            assert result.choice.move == "b0c2"
         assert len(child_processes) == 1
         log = (tmp_path / "uci.log").read_text()
         assert log.count(" uci\n") == 1
@@ -37,7 +37,7 @@ async def test_start_search_reuse_and_close(engine, child_processes, tmp_path):
 
 
 async def test_failed_configuration_keeps_previous_process(engine, child_processes):
-    settings = EngineSection(candidates=1, difficulty=6)
+    settings = EngineSection(difficulty=6)
     await engine.start(settings)
     try:
         with pytest.raises(EngineFailure, match="不兼容"):
@@ -70,7 +70,7 @@ async def test_interrupted_search_reaps_and_next_request_recovers(engine, child_
             searching.set()
 
     monkeypatch.setattr(UciProcess, "send", tracked_send)
-    settings = EngineSection(executable=mode, candidates=1, difficulty=6)
+    settings = EngineSection(executable=mode, difficulty=6)
     await engine.start(settings)
     try:
         task = asyncio.create_task(engine.analyse(Board(), settings))
@@ -98,7 +98,7 @@ async def test_disabled_engine_never_launches(engine, child_processes):
 
 
 async def test_search_timeout_reaps_process(engine, child_processes, monkeypatch):
-    settings = EngineSection(executable="hang", candidates=1, difficulty=6)
+    settings = EngineSection(executable="hang", difficulty=6)
     await engine.start(settings)
     timeout = asyncio.timeout
     monkeypatch.setattr("xiangqi.engine.asyncio.timeout", lambda seconds: timeout(0.1))
@@ -111,7 +111,7 @@ async def test_search_timeout_reaps_process(engine, child_processes, monkeypatch
 
 
 async def test_queued_old_request_cannot_undo_configuration(engine, child_processes):
-    old_settings = EngineSection(candidates=1, difficulty=6)
+    old_settings = EngineSection(difficulty=6)
     await engine.start(old_settings)
     try:
         await engine.start(old_settings.model_copy(update={"executable": "new"}))

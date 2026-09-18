@@ -30,7 +30,15 @@ class UciProcess:
                 )
                 await self.send("uci")
                 handshake = await self.read_until("uciok")
-                for required in ("Threads", "Hash", "MultiPV", "UCI_Variant", "Use NNUE"):
+                for required in (
+                    "Threads",
+                    "Hash",
+                    "MultiPV",
+                    "UCI_Variant",
+                    "Use NNUE",
+                    "Skill Level",
+                    "UCI_LimitStrength",
+                ):
                     if not any(line.startswith(f"option name {required} type ") for line in handshake):
                         raise EngineFailure("引擎不兼容，请安装官方 Fairy-Stockfish 14 largeboard")
                 if not any(" var xiangqi" in line for line in handshake):

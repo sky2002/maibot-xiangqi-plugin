@@ -241,8 +241,8 @@ async def test_sdk_fresh_install_works_without_installer_or_taskset(tmp_path, mo
         assert (tmp_path / "engine/fairy-sf-14-largeboard").is_file()
         assert len(child_processes) == 1 and child_processes[0].returncode is None
         settings = plugin.service.engine_settings.model_copy(update={"difficulty": 6})
-        candidates = await plugin.service.engine.analyse(Board(), settings)
-        assert candidates and all(c.choice.move in Board().legal_moves() for c in candidates)
+        move = await plugin.service.engine.analyse(Board(), settings)
+        assert move.choice.move in Board().legal_moves()
     finally:
         await plugin.on_unload()
     assert child_processes[0].returncode is not None

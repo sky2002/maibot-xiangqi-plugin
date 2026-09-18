@@ -1,13 +1,9 @@
 [plugin]
 enabled = true
-config_version = "0.4.1"
+config_version = "0.5.0"
 
 [chess]
-# 宿主 model_config.toml 中已配置的模型名称，留空使用 utils。
-model_name = ""
 request_timeout = 30
-# bot 选招单独限时，给思考型模型更多时间。
-move_timeout = 120
 idle_minutes = 30
 repetition = 3
 no_capture_halfmoves = 120
@@ -19,13 +15,12 @@ admins = []
 
 [engine]
 # 默认启用：通过 WebUI 安装后自动准备内置引擎，无需安装或启动脚本。
-# 设为 false 可明确使用旧的纯 LLM 模式；引擎故障不会自动降级。
+# 设为 false 会暂停自动落子并保留棋局；LLM 不代走。
 enabled = true
-# 新棋局默认难度：1入门、2简单、3标准、4困难、5挑战、6超人类；名称不是等级认证。
+# 新棋局默认难度：1入门、2简单、3标准、4困难、5挑战、6全力；名称不是等级认证。
 difficulty = 3
 executable = ""
 # -1 自动选择允许集合中编号最大的逻辑 CPU；仅限制引擎，不限制宿主调度。
 cpu = -1
-candidates = 3
 movetime_ms = 800
 hash_mb = 64

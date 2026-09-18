@@ -19,8 +19,8 @@ from .store import Game, Store
 HELP = """中国象棋 · 每群一盘，只有发起者可以落子
 下棋 开始 [红|黑] [难度]：例如「下棋 开始 黑 简单」
 下棋 难度：查看本局难度；「下棋 难度 2」由棋手调整
-难度：1入门、2简单、3标准、4困难、5挑战、6超人类；名称不是等级认证
-入门至困难包含递减的失误概率，挑战和超人类档不主动制造失误。
+难度：1入门、2简单、3标准、4困难、5挑战、6全力；名称不是等级认证
+六档使用引擎原生 Skill Level，全力档不启用原生降强。
 下棋 炮八平五：中文棋谱（支持前车、后马等）
 下棋 b2 e2：固定坐标，红方在下，a0 左下、i9 右上
 下棋 把b2的炮移到e2：自然语言，歧义时让你选择
@@ -30,7 +30,7 @@ HELP = """中国象棋 · 每群一盘，只有发起者可以落子
 下棋 重试：bot 选招失败后继续
 下棋 认输：发起者结束棋局
 下棋 结束：已配置的本群管理员强制结束，不计胜负
-默认引擎提供候选、LLM 拍板，程序检查合法性。失败保留棋局，不自动代选。
+引擎决定走法，程序检查合法性；LLM 只解析用户指令、解说和聊天。引擎失败保留棋局。
 bot 落子后自动解说；棋手直接聊本局即可，无需聊天指令。聊天不会落子。
 采用简化和棋规则：重复局面或连续无吃子达到阈值即和棋，长将长捉不单独判责。
 对局支持重启续玩；空闲超时结束，不计胜负。结束后可看最后棋盘，不能悔棋。"""
@@ -115,7 +115,11 @@ class Service:
         if sent is False:
             raise RuntimeError("发送棋盘失败")
         status = game.result if game.result else "轮到 maibot。" if game.bot_turn else "轮到你走。"
-        status += f" 难度：{label(game.difficulty)}。" if self.engine_settings.enabled else " 纯 LLM 模式。"
+        status += (
+            f" 难度：{label(game.difficulty)}。"
+            if self.engine_settings.enabled
+            else " 引擎已关闭，自动落子暂停。"
+        )
         if position.board.in_check and not game.result:
             status += "将军！"
         await self._text(game.stream_id, "\n".join(x for x in (message, status) if x))
@@ -178,25 +182,23 @@ class Service:
         evidence = None
         try:
             board = snapshot.position().board
-            if self.engine_settings.enabled:
-                engine_settings = self.engine_settings.model_copy(deep=True)
-                engine_settings.difficulty = snapshot.difficulty
-                candidates = await self.engine.analyse(board, engine_settings)
-                if not self._same(snapshot):
-                    return
-                choice = await player.select(board, list(snapshot.moves), candidates)
-                evidence = {
-                    "side": "红" if board.red_turn else "黑",
-                    "fen": board.fen,
-                    "selected": next(c.evidence() for c in candidates if c.choice.move == choice.move),
-                }
-            else:
-                choice = await player.select(board, list(snapshot.moves))
-        except (ModelFailure, EngineFailure) as exc:
+            if not self.engine_settings.enabled:
+                raise EngineFailure("象棋引擎已关闭，请在插件配置中启用 engine.enabled 后重试")
+            engine_settings = self.engine_settings.model_copy(deep=True)
+            engine_settings.difficulty = snapshot.difficulty
+            selected = await self.engine.analyse(board, engine_settings)
+            choice = selected.choice
+            evidence = {
+                "side": "红" if board.red_turn else "黑",
+                "fen": board.fen,
+                "skill_level": LEVELS[snapshot.difficulty].skill,
+                "selected": selected.evidence(),
+            }
+        except EngineFailure as exc:
             if self._same(snapshot):
                 await self._show(snapshot, f"{exc} 已保留当前局面，请发送「下棋 重试」。")
             return
-        # 模型返回时重新校验局号、完整棋谱和结束状态，丢弃过期回复。
+        # 引擎返回时重新校验局号、完整棋谱和结束状态，丢弃过期结果。
         if not self._same(snapshot):
             return
         self._apply_move(snapshot, choice)
@@ -372,11 +374,7 @@ class Service:
                     if game
                     else f"新局默认难度：{label(self.engine_settings.difficulty)}。"
                 )
-                mode = (
-                    ""
-                    if self.engine_settings.enabled
-                    else "当前是纯 LLM 模式，难度限制仅在启用引擎时生效。\n"
-                )
+                mode = "" if self.engine_settings.enabled else "引擎已关闭，自动落子暂停。\n"
                 await self._text(
                     stream_id,
                     f"{mode}{current}\n可选：{levels}。\n发起者可用「下棋 难度 简单」调整，正在思考时需等待；从下一次搜索生效。",
@@ -417,14 +415,14 @@ class Service:
                 return
             if command.split()[0] == "难度":
                 if not self.engine_settings.enabled:
-                    await self._text(stream_id, "当前是纯 LLM 模式，请由部署者启用引擎后再调难度。")
+                    await self._text(stream_id, "引擎已关闭，请由部署者启用引擎后再调难度。")
                     return
                 parts = command.split()
                 difficulty = parse_level(parts[1]) if len(parts) == 2 else None
                 if difficulty is None:
                     await self._text(
                         stream_id,
-                        "难度请选择 1–6 或入门、简单、标准、困难、挑战、超人类，例如「下棋 难度 2」。",
+                        "难度请选择 1–6 或入门、简单、标准、困难、挑战、全力，例如「下棋 难度 2」。",
                     )
                     return
                 game.difficulty = difficulty

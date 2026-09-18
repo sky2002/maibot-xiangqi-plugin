@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 import asyncio
 import time
 
+from xiangqi.engine import EngineFailure, EngineMove
 from xiangqi.llm import Player
 from xiangqi.rules import Board
 from xiangqi.store import Store
@@ -74,20 +75,21 @@ async def test_duplicate_messages_are_ignored_and_persisted(service, tmp_path):
 
 
 async def test_failure_keeps_player_move_and_can_retry(service):
-    service.ctx.llm.generate.return_value = {"success": True, "response": '{"id":9999}'}
+    choose = service.engine.analyse.side_effect
+    service.engine.analyse.side_effect = EngineFailure("引擎故障")
     await command(service, "开始")
     await command(service, "炮八平五")
     await drain(service)
     assert service.store.get("s1").moves == ["b2e2"]
     assert "下棋 重试" in said(service)
-    service.ctx.llm.generate.return_value = {"success": True, "response": '{"id":1}'}
+    service.engine.analyse.side_effect = choose
     await command(service, "重试")
     await drain(service)
     assert len(service.store.get("s1").moves) == 2
 
 
 async def test_can_undo_unanswered_move(service):
-    service.ctx.llm.generate.return_value = {"success": False}
+    service.engine.analyse.side_effect = EngineFailure("引擎故障")
     await command(service, "开始")
     await command(service, "炮八平五")
     await drain(service)
@@ -98,12 +100,12 @@ async def test_can_undo_unanswered_move(service):
 async def test_busy_rejects_second_move_and_undo(service):
     started, release = asyncio.Event(), asyncio.Event()
 
-    async def delayed(**kwargs):
+    async def delayed(board, settings):
         started.set()
         await release.wait()
-        return {"success": True, "response": '{"id":1}'}
+        return EngineMove(board.choices()[0])
 
-    service.ctx.llm.generate.side_effect = delayed
+    service.engine.analyse.side_effect = delayed
     await command(service, "开始")
     await command(service, "炮八平五")
     await started.wait()
@@ -118,15 +120,15 @@ async def test_busy_rejects_second_move_and_undo(service):
 async def test_late_reply_cannot_modify_replacement_game(service, monkeypatch):
     started, release = asyncio.Event(), asyncio.Event()
 
-    async def delayed(self, board, moves):
+    async def delayed(board, settings):
         started.set()
         try:
             await release.wait()
         except asyncio.CancelledError:
             await release.wait()  # 模拟不响应取消的外部提供方。
-        return board.choices()[0]
+        return EngineMove(board.choices()[0])
 
-    monkeypatch.setattr(Player, "select", delayed)
+    service.engine.analyse.side_effect = delayed
     await command(service, "开始")
     await command(service, "炮八平五")
     old_task = service.jobs["s1"]
@@ -212,17 +214,17 @@ async def test_no_capture_rule_finishes_game(service):
     assert len(service.store.get("s1").moves) == 2
 
 
-async def test_wrapped_model_answer_completes_bot_turn(service):
+async def test_model_output_cannot_choose_bot_move(service):
     service.ctx.llm.generate.return_value = {"success": True, "response": '我选择：\n```json\n{"id":1}\n```'}
     await command(service, "开始")
     await command(service, "炮八平五")
     await drain(service)
     assert len(service.store.get("s1").moves) == 2
-    assert "两次未能返回有效走法" not in said(service)
+    service.ctx.llm.generate.assert_not_called()
 
 
-async def test_timeout_message_preserves_player_move_and_identifies_timeout(service):
-    service.ctx.llm.generate.side_effect = TimeoutError()
+async def test_engine_timeout_preserves_player_move_and_identifies_timeout(service):
+    service.engine.analyse.side_effect = EngineFailure("引擎响应超时")
     await command(service, "开始")
     await command(service, "炮八平五")
     await drain(service)

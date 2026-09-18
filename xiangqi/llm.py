@@ -1,4 +1,4 @@
-"""LLM 只返回候选编号；选招、意图解析和人设棋评分开。"""
+"""LLM 只负责用户意图解析、人设棋评和聊天，不决定 bot 走法。"""
 
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -9,7 +9,6 @@ import re
 import time
 
 from .config import ChessSection
-from .engine import Candidate
 from .rules import Board, Choice, PIECES, squares
 
 
@@ -141,14 +140,10 @@ class Player:
             self.has_reasoning,
         )
 
-    async def _generate(
-        self, system: str, data: Dict[str, Any], *, selecting: bool = False, limit_seconds: float = 0
-    ) -> str:
+    async def _generate(self, system: str, data: Dict[str, Any], *, limit_seconds: float = 0) -> str:
         self.response_chars = 0
         self.has_reasoning = False
-        seconds = limit_seconds or (
-            self.settings.move_timeout if selecting else self.settings.request_timeout
-        )
+        seconds = limit_seconds or self.settings.request_timeout
         try:
             async with asyncio.timeout(seconds):
                 result = await self.ctx.llm.generate(
@@ -157,13 +152,12 @@ class Player:
                         {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
                     ],
                     task_name="utils",
-                    model_name=self.settings.model_name if selecting else "",
+                    model_name="",
                     timeout_ms=int(seconds * 1000) + 1000,
                 )
         except TimeoutError as exc:
-            option = "move_timeout" if selecting else "request_timeout"
             raise ModelFailure(
-                f"模型请求超时（单次限时 {seconds:g} 秒，可调整 chess.{option}）", "timeout"
+                f"模型请求超时（单次限时 {seconds:g} 秒，可调整 chess.request_timeout）", "timeout"
             ) from exc
         except Exception as exc:
             raise request_failure(exc) from None
@@ -181,46 +175,6 @@ class Player:
                 )
             raise ModelFailure("模型返回了空内容，请检查宿主模型日志", "empty_response")
         return response
-
-    async def select(
-        self, board: Board, moves: List[str], candidates: Optional[List[Candidate]] = None
-    ) -> Choice:
-        choices = board.choices() if candidates is None else [c.choice for c in candidates]
-        legal = set(board.legal_moves())
-        if not choices or any(c.move not in legal for c in choices):
-            raise ModelFailure("没有通过校验的选招候选")
-        data = {**board_data(board), "history": moves, "legal_moves": numbered(choices)}
-        if candidates is not None:
-            data["engine_analysis"] = [c.evidence() for c in candidates]
-            data["score_meaning"] = (
-                "所有分数从当前行棋方视角给出；cp 越大越好；mate 正数为己方可杀、负数为己方被杀。短时搜索的估计，不是裁判结论。pv 坐标使用本插件 a0 至 i9。"
-            )
-        system = (
-            "你正在下中国象棋，请根据局面认真选择一步争取胜利。考虑己方将帅安全、吃子、对手的回应。"
-            '只能从 legal_moves 中选择一个 id。只输出 JSON：{"id": 1}，不要输出思考过程、棋评或其他文字。'
-            "红方棋谱从右到左一至九路，黑方从己方视角右到左1至9路。"
-            "有 engine_analysis 时，根据引擎分数和后续变化选招，优先避免明显劣势或被杀；最终决定由你作出。"
-        )
-        failures = []
-        for attempt in range(2):
-            started = time.monotonic()
-            try:
-                payload = parse_json(await self._generate(system, data, selecting=True))
-                ident = payload.get("id")
-                if isinstance(ident, str) and re.fullmatch(r"[1-9][0-9]{0,5}", ident.strip()):
-                    ident = int(ident)
-                if type(ident) is not int or not 1 <= ident <= len(choices):
-                    raise InvalidAnswer(f"id 必须是 1 至 {len(choices)} 的合法走法编号", "invalid_id")
-                return choices[ident - 1]
-            except (InvalidAnswer, ModelFailure) as exc:
-                self._failed_attempt("select", attempt, started, exc)
-                failures.append(f"第{attempt + 1}次：{exc}")
-                if attempt:
-                    raise ModelFailure("模型选招失败。" + "；".join(failures) + "。", exc.code) from None
-                data["retry_feedback"] = (
-                    f'{exc}。只输出一个 JSON 对象，id 为 1 至 {len(choices)} 的整数，例如 {{"id":1}}。不得输出多个候选。'
-                )
-        raise AssertionError("不可达")
 
     async def interpret(self, board: Board, instruction: str) -> Tuple[List[Choice], bool]:
         choices = board.choices()
@@ -268,6 +222,7 @@ class Player:
                 "根据给定人设，对自己刚走的一步棋自动解说一句，可以自然调侃，不超过60字。"
                 "board 是落子后的局面；engine_before_move 是落子前从自己视角的短时估计。"
                 "只解释有棋盘或引擎依据的意图，不把搜索分数当成确定胜负，不编造已吃掉的棋子。"
+                "所走着法受难度设置影响，不一定最优；引擎未提供评分或变化时不得自行编造。"
                 '不要输出分析过程。只输出 JSON：{"reply":"棋评内容"}。',
                 {
                     **board_data(board),

@@ -15,7 +15,7 @@ class IsolationError(RuntimeError):
 
 def engine_command(executable: str, cpu: int = -1, data_dir: Optional[Path] = None) -> List[str]:
     if sys.platform != "linux":
-        raise IsolationError("引擎绑核需要 Linux；其他系统可明确设置 engine.enabled = false 使用纯 LLM 模式")
+        raise IsolationError("引擎绑核需要 Linux；其他系统可设置 engine.enabled = false 暂停自动落子")
     try:
         allowed = os.sched_getaffinity(0)
     except OSError as exc:

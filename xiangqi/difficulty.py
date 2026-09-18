@@ -1,4 +1,4 @@
-"""结合搜索深度和受控失误分档，不映射真人等级分。"""
+"""按原生 Skill Level 分档；数值是初始映射，不映射真人等级分。"""
 
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -7,23 +7,22 @@ from typing import Optional, Tuple
 @dataclass(frozen=True)
 class Difficulty:
     name: str
-    depth: int  # 0 表示仅受部署者设置的搜索时间限制。
-    mistake_rate: float = 0
-    min_loss: int = 0
-    max_loss: int = 0
+    skill: int
 
 
 LEVELS = {
-    1: Difficulty("入门", 1, 0.85, 100, 600),
-    2: Difficulty("简单", 1, 0.60, 50, 300),
-    3: Difficulty("标准", 2, 0.30, 25, 150),
-    4: Difficulty("困难", 4, 0.15, 10, 80),
-    5: Difficulty("挑战", 6),
-    6: Difficulty("超人类", 0),
+    1: Difficulty("入门", -20),
+    2: Difficulty("简单", -12),
+    3: Difficulty("标准", -4),
+    4: Difficulty("困难", 4),
+    5: Difficulty("挑战", 12),
+    6: Difficulty("全力", 20),
 }
 
 
 def parse_level(text: str) -> Optional[int]:
+    if text == "超人类":  # 兼容旧指令，存档仍使用数字 6。
+        return 6
     return next((level for level, spec in LEVELS.items() if text in (str(level), spec.name)), None)
 
 

@@ -2,14 +2,13 @@ from unittest.mock import AsyncMock
 
 import asyncio
 import os
-import random
 import sys
 
 import pytest
 
 from xiangqi.config import EngineSection
 from xiangqi.difficulty import LEVELS
-from xiangqi.engine import Engine, EngineFailure, candidates_from_info, select_candidates
+from xiangqi.engine import Engine, EngineFailure, move_from_info
 from xiangqi.rules import Board, native_move
 
 
@@ -17,30 +16,29 @@ def info(move, depth=5, index=1, score=25):
     return f"info depth {depth} seldepth 6 multipv {index} score cp {score} nodes 20 pv {native_move(move)}"
 
 
-def test_engine_uses_completed_multipv_depth_and_converts_rank_ten():
+def test_native_bestmove_wins_over_multipv_ranking():
     board = Board()
     board.push("b2e2")
     choices = [c for c in board.choices() if c.move[1] == "9"][:3]
-    lines = [info(c.move, index=i) for i, c in enumerate(choices, 1)]
-    lines += [info(choices[0].move, depth=6, score=500)]
-    result = candidates_from_info(board, lines, native_move(choices[0].move), 3)
-    assert [c.choice for c in result] == choices
-    assert all(c.depth == 5 and c.score == 25 for c in result)
-    assert "10" in native_move(choices[0].move)
+    lines = [info(c.move, index=i, score=100 - i * 50) for i, c in enumerate(choices, 1)]
+    result = move_from_info(board, lines, native_move(choices[2].move))
+    assert result.choice == choices[2]
+    assert result.score == -50 and result.depth == 5
+    assert "10" in native_move(choices[2].move)
 
 
-@pytest.mark.parametrize(
-    "best,lines",
-    [
-        ("(none)", []),
-        ("a1a10", []),
-        ("b1c3", ["info depth 2 multipv 1 score cp 40 lowerbound pv b1c3"]),
-        ("b1c3", ["info depth 2 multipv 1 score cp 40 nodes 1 pv a1a10"]),
-    ],
-)
-def test_bad_or_incomplete_engine_output_rejected(best, lines):
+@pytest.mark.parametrize("best", ["(none)", "a1a10", "bad", "b1b9"])
+def test_illegal_bestmove_is_rejected(best):
     with pytest.raises(EngineFailure):
-        candidates_from_info(Board(), lines, best, 1)
+        move_from_info(Board(), [], best)
+
+
+def test_missing_or_bound_analysis_does_not_invent_score_or_block_legal_move():
+    result = move_from_info(Board(), ["info depth 2 score cp 40 lowerbound pv b1c3"], "b1c3")
+    assert result.choice.move == "b0c2"
+    assert "score" not in result.evidence()
+    different = move_from_info(Board(), [info("b0c2")], "h1g3")
+    assert different.choice.move == "h0g2" and "score" not in different.evidence()
 
 
 async def test_global_engine_searches_are_serial(monkeypatch, fake_uci):
@@ -105,49 +103,17 @@ async def test_cancel_kills_and_reaps_engine(monkeypatch):
 
 @pytest.mark.skipif(not os.environ.get("XIANGQI_TEST_ENGINE"), reason="可选真实引擎验证")
 @pytest.mark.parametrize("difficulty", LEVELS)
-async def test_real_engine_red_and_black_candidates(difficulty, monkeypatch):
+async def test_real_engine_red_and_black_moves(difficulty, monkeypatch):
     monkeypatch.setattr("xiangqi.engine.engine_command", lambda *args: [os.environ["XIANGQI_TEST_ENGINE"]])
     board = Board()
     engine = Engine()
     try:
         for _ in range(2):
             found = await engine.analyse(board, EngineSection(difficulty=difficulty))
-            assert 1 <= len(found) <= 3
-            assert len({c.choice.move for c in found}) == len(found)
-            if not LEVELS[difficulty].mistake_rate:
-                assert len(found) == 3
-            for c in found:
-                if LEVELS[difficulty].depth:
-                    assert c.depth <= LEVELS[difficulty].depth
-                assert c.choice.move in board.legal_moves()
-                future = Board(board.fen)
-                for move in c.pv:
-                    future.push(move)
-            board.push(found[-1].choice.move)
+            assert found.choice.move in board.legal_moves()
+            future = Board(board.fen)
+            for move in found.pv:
+                future.push(move)
+            board.push(found.choice.move)
     finally:
         await engine.close()
-
-
-@pytest.mark.skipif(not os.environ.get("XIANGQI_TEST_ENGINE"), reason="可选真实引擎验证")
-@pytest.mark.parametrize("difficulty", [1, 2, 3, 4])
-async def test_real_handicap_excludes_best_move_and_meets_loss_target(difficulty, monkeypatch):
-    evaluated = []
-
-    def select(ranked, settings):
-        evaluated.extend(ranked)
-        return select_candidates(ranked, settings, random.Random(1))
-
-    monkeypatch.setattr("xiangqi.engine.select_candidates", select)
-    board = Board()
-    monkeypatch.setattr("xiangqi.engine.engine_command", lambda *args: [os.environ["XIANGQI_TEST_ENGINE"]])
-    engine = Engine()
-    try:
-        result = await engine.analyse(board, EngineSection(difficulty=difficulty))
-    finally:
-        await engine.close()
-    assert len(evaluated) == len(board.legal_moves())
-    assert all(c.score_kind == "cp" for c in result)
-    assert all(evaluated[0].score - c.score >= LEVELS[difficulty].min_loss for c in result)
-    assert evaluated[0].choice.move not in {c.choice.move for c in result}
-    if difficulty <= 2:
-        assert not {c.choice.move for c in result} & {c.choice.move for c in evaluated[:3]}

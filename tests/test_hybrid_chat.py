@@ -1,12 +1,11 @@
 from unittest.mock import AsyncMock
 
 import asyncio
-import json
 
 import pytest
 
-from xiangqi.engine import Candidate, EngineFailure
-from xiangqi.llm import ModelFailure, Player
+from xiangqi.engine import EngineMove, EngineFailure
+from xiangqi.llm import Player
 from xiangqi.rules import Board
 
 
@@ -15,20 +14,62 @@ async def start(service):
 
 
 def candidate(choice):
-    return Candidate(choice, "cp", 30, 7, [choice.move])
+    return EngineMove(choice, "cp", 30, 7, [choice.move])
 
 
-async def test_llm_only_sees_engine_subset_and_decides(service):
-    options = [candidate(c) for c in Board().choices()[-3:]]
-    service.ctx.llm.generate.return_value = {"success": True, "response": '{"id": 2}'}
-    selected = await Player(service.ctx, service.settings).select(Board(), [], options)
-    assert selected == options[1].choice
-    sent = json.loads(service.ctx.llm.generate.call_args.kwargs["prompt"][1]["content"])
-    assert [c["move"] for c in sent["legal_moves"]] == [c.choice.move for c in options]
-    assert len(sent["engine_analysis"]) == 3
-    service.ctx.llm.generate.return_value = {"success": True, "response": '{"id": 4}'}
-    with pytest.raises(ModelFailure):
-        await Player(service.ctx, service.settings).select(Board(), [], options)
+async def test_engine_moves_when_model_is_unavailable(service):
+    service.ctx.llm.generate.side_effect = TimeoutError()
+    await start(service)
+    await service.handle("s1", "g1", "qq", "alice", "炮八平五")
+    await asyncio.gather(*list(service.jobs.values()))
+    assert len(service.store.get("s1").moves) == 2
+    service.ctx.llm.generate.assert_not_called()
+
+
+async def test_disabled_engine_never_falls_back_to_llm(service):
+    service.engine_settings.enabled = False
+    await start(service)
+    await service.handle("s1", "g1", "qq", "alice", "炮八平五")
+    await asyncio.gather(*list(service.jobs.values()))
+    assert service.store.get("s1").moves == ["b2e2"]
+    service.ctx.llm.generate.assert_not_called()
+    service.engine.analyse.assert_not_called()
+
+
+async def test_commentary_timeout_does_not_undo_or_repeat_engine_move(service):
+    service.settings.commentary = True
+    service.ctx.llm.generate.side_effect = TimeoutError()
+    await start(service)
+    await service.handle("s1", "g1", "qq", "alice", "炮八平五")
+    await asyncio.gather(*list(service.jobs.values()))
+    await asyncio.gather(*list(service.aux))
+    assert len(service.store.get("s1").moves) == 2
+    assert service.engine.analyse.await_count == 1
+    assert service.ctx.llm.generate.await_count == 1
+
+
+async def test_slow_commentary_runs_after_move_is_saved(service, monkeypatch):
+    service.settings.commentary = True
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def slow(*args):
+        started.set()
+        await release.wait()
+        return "棋评"
+
+    monkeypatch.setattr(Player, "comment", slow)
+    await start(service)
+    await service.handle("s1", "g1", "qq", "alice", "炮八平五")
+    await asyncio.wait_for(started.wait(), 3)
+    try:
+        assert len(service.store.get("s1").moves) == 2
+        await asyncio.gather(*list(service.jobs.values()))
+        await service.handle("s1", "g1", "qq", "alice", "悔棋")
+        assert service.store.get("s1").moves == []
+    finally:
+        release.set()
+        await asyncio.gather(*list(service.aux))
+    assert all(c.args[0] != "棋评" for c in service.ctx.send.text.call_args_list)
 
 
 async def test_engine_failure_preserves_human_move_without_llm_fallback(service):
@@ -48,7 +89,7 @@ async def test_hybrid_move_automatically_explained_with_selected_evidence(servic
     board = Board()
     board.push("b2e2")
     options = [candidate(c) for c in board.choices()[-3:]]
-    service.engine.analyse = AsyncMock(return_value=options)
+    service.engine.analyse = AsyncMock(return_value=options[1])
     service.ctx.llm.generate.return_value = {"success": True, "response": '{"id": 2}'}
     explain = AsyncMock(return_value="先把马跳出来，准备接应。")
     monkeypatch.setattr(Player, "comment", explain)
@@ -58,6 +99,7 @@ async def test_hybrid_move_automatically_explained_with_selected_evidence(servic
     await asyncio.gather(*list(service.aux))
     game = service.store.get("s1")
     assert game.moves == ["b2e2", options[1].choice.move]
+    service.ctx.llm.generate.assert_not_called()
     assert explain.call_args.args[2]["selected"]["move"] == options[1].choice.move
     assert any("先把马" in c.args[0] for c in service.ctx.send.text.call_args_list)
     await service.handle("s1", "g1", "qq", "alice", "悔棋")

@@ -7,7 +7,7 @@ import pytest
 
 from xiangqi.config import EngineSection
 from xiangqi.difficulty import opening
-from xiangqi.engine import Candidate
+from xiangqi.engine import EngineMove
 from xiangqi.store import Store
 
 
@@ -104,7 +104,7 @@ async def test_busy_cannot_change_level_and_engine_receives_game_setting(service
         started.set()
         await release.wait()
         c = board.choices()[0]
-        return [Candidate(c, "cp", 30, 3, [c.move])]
+        return EngineMove(c, "cp", 30, 3, [c.move])
 
     service.engine.analyse = AsyncMock(side_effect=analyse)
     await command(service, "开始 黑 简单")
@@ -117,11 +117,12 @@ async def test_busy_cannot_change_level_and_engine_receives_game_setting(service
     assert len(service.store.get("s1").moves) == 1
 
 
-async def test_pure_llm_reports_no_engine_difficulty(service):
+async def test_disabled_engine_reports_paused_difficulty(service):
     await command(service, "开始")
     before = service.store.get("s1")
+    service.engine_settings.enabled = False
     await command(service, "难度 1")
-    assert "纯 LLM" in said(service)
+    assert "引擎已关闭" in said(service)
     assert service.store.get("s1") == before
 
 
