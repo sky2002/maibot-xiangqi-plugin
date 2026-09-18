@@ -17,18 +17,25 @@ class XiangqiPlugin(MaiBotPlugin):
         self.service: Optional[Service] = None
 
     async def on_load(self) -> None:
-        self.service = Service(self.ctx, self.ctx.paths.data_dir, self.config.chess, self.config.engine)
-        await self.service.start()
+        if self.service is not None or not self.config.plugin.enabled:
+            return
+        service = Service(self.ctx, self.ctx.paths.data_dir, self.config.chess, self.config.engine)
+        try:
+            await service.start()
+        except BaseException:
+            await service.close()
+            raise
+        self.service = service
+        self.ctx.logger.info("象棋插件已启动，引擎生命周期由插件系统管理")
 
     async def on_unload(self) -> None:
         if self.service:
-            await self.service.close()
-            self.service = None
+            service, self.service = self.service, None
+            await service.close()
 
     async def on_config_update(self, scope: str, config_data: Dict[str, object], version: str) -> None:
         if self.service:
-            self.service.settings = self.config.chess
-            self.service.engine_settings = self.config.engine
+            await self.service.configure(self.config.chess, self.config.engine)
 
     @HookHandler(
         "chat.receive.after_process",

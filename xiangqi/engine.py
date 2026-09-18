@@ -1,6 +1,7 @@
-"""短时单线程 UCI 搜索；跨群串行，退出/取消时回收子进程。"""
+"""由插件生命周期管理的引擎；跨群串行，失败/取消时回收子进程。"""
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import asyncio
@@ -11,10 +12,7 @@ from .config import EngineSection
 from .difficulty import LEVELS
 from .isolation import IsolationError, engine_command
 from .rules import Board, Choice, public_move
-
-
-class EngineFailure(RuntimeError):
-    pass
+from .uci import EngineFailure, UciProcess
 
 
 @dataclass(frozen=True)
@@ -106,97 +104,93 @@ def candidates_from_info(board: Board, lines: List[str], best: str, count: int) 
     raise EngineFailure("引擎未完成候选分析，请重试或增加 engine.movetime_ms")
 
 
-async def search(command: List[str], board: Board, settings: EngineSection) -> List[Candidate]:
-    """传输层独立可测；生产调用者必须先通过 CPU 隔离核验。"""
-    process = None
+async def _analyse(process: UciProcess, board: Board, settings: EngineSection) -> List[Candidate]:
     try:
         async with asyncio.timeout(settings.movetime_ms / 1000 + 8):
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-                limit=65536,
-            )
-
-            async def send(line: str) -> None:
-                process.stdin.write((line + "\n").encode("ascii"))
-                await process.stdin.drain()
-
-            async def read_until(prefix: str) -> List[str]:
-                lines = []
-                while True:
-                    raw = await process.stdout.readline()
-                    if not raw:
-                        raise EngineFailure("引擎提前退出，请检查可执行文件及 CPU 隔离设置")
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    lines.append(line)
-                    if len(lines) > 10000:
-                        raise EngineFailure("引擎协议输出异常")
-                    if line == prefix or line.startswith(prefix + " "):
-                        return lines
-
-            await send("uci")
-            handshake = await read_until("uciok")
-            for required in ("Threads", "Hash", "MultiPV", "UCI_Variant", "Use NNUE"):
-                if not any(line.startswith(f"option name {required} type ") for line in handshake):
-                    raise EngineFailure("引擎不兼容，请安装官方 Fairy-Stockfish 14 largeboard")
-            if not any(" var xiangqi" in line for line in handshake):
-                raise EngineFailure("引擎未包含象棋规则，请使用 largeboard 版本")
             spec = LEVELS[settings.difficulty]
             legal_count = len(board.legal_moves())
             # 有失误机制的档位必须评估最佳三招之外的着法，否则 LLM 总能挑回强招。
             count = legal_count if spec.mistake_rate else min(settings.candidates, legal_count)
             if not count:
                 raise EngineFailure("当前局面没有合法着法")
-            for option, value in (
-                ("Threads", 1),
-                ("Hash", settings.hash_mb),
-                ("MultiPV", count),
-                ("UCI_Variant", "xiangqi"),
-                ("Use NNUE", "false"),
-                ("Ponder", "false"),
-                # Skill Level 主要改写最终 bestmove；此处从 MultiPV 交给 LLM 选招，
-                # 所以通过真正限制搜索深度调级，不依赖 bestmove 的随机降强。
-                ("Skill Level", 20),
-                ("UCI_LimitStrength", "false"),
-            ):
-                await send(f"setoption name {option} value {value}")
-            await send("ucinewgame")
-            await send("isready")
-            await read_until("readyok")
+            for option, value in (("Hash", settings.hash_mb), ("MultiPV", count)):
+                await process.send(f"setoption name {option} value {value}")
+            # 每局每步重新初始化，复用进程但不让其他群的搜索状态泄漏进本次分析。
+            await process.send("ucinewgame")
+            await process.send("isready")
+            await process.read_until("readyok")
             # 插件有自己的和棋裁判；不把历史计数交给引擎提前判和。
             fields = board.fen.split()
             fields[4] = "0"
-            await send("position fen " + " ".join(fields))
+            await process.send("position fen " + " ".join(fields))
+            # Skill Level 主要改写最终 bestmove；这里以 MultiPV 和真正的深度限制调级。
             depth = spec.depth
-            await send(f"go movetime {settings.movetime_ms}" + (f" depth {depth}" if depth else ""))
-            lines = await read_until("bestmove")
+            await process.send(f"go movetime {settings.movetime_ms}" + (f" depth {depth}" if depth else ""))
+            lines = await process.read_until("bestmove")
             ranked = candidates_from_info(board, lines, lines[-1].split()[1], count)
             return select_candidates(ranked, settings)
     except TimeoutError:
         raise EngineFailure("引擎响应超时，棋局已保留，请检查引擎安装后重试") from None
     except (OSError, ValueError, IndexError) as exc:
-        raise EngineFailure("引擎启动或协议解析失败，请检查安装和隔离启动方式") from exc
-    finally:
-        if process is not None:
-            # 不依赖引擎响应 quit，取消时也保证搜索不残留占用 CPU。
-            if process.returncode is None:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-            await process.communicate()
+        raise EngineFailure("引擎通信或协议解析失败，请检查安装和 CPU 设置") from exc
 
 
 class Engine:
-    def __init__(self) -> None:
+    def __init__(self, data_dir: Optional[Path] = None) -> None:
         self.lock = asyncio.Lock()
+        self._data_dir = data_dir
+        self._session: Optional[UciProcess] = None
+        self._settings: Optional[EngineSection] = None
+        self._closed = False
+
+    async def _prepare(self, settings: EngineSection) -> UciProcess:
+        if self._closed:
+            raise EngineFailure("引擎已随插件卸载")
+        try:
+            command = await asyncio.to_thread(
+                engine_command, settings.executable, settings.cpu, self._data_dir
+            )
+        except IsolationError as exc:
+            raise EngineFailure(str(exc)) from None
+        if self._session is not None and self._session.command == command and self._session.alive:
+            return self._session
+        # 新配置先成功握手再替换；启动失败仍可继续使用旧配置。
+        replacement = UciProcess(command)
+        await replacement.start()
+        old, self._session = self._session, replacement
+        if old is not None:
+            await old.close()
+        return replacement
+
+    async def start(self, settings: EngineSection) -> None:
+        async with self.lock:
+            if self._closed:
+                raise EngineFailure("引擎已随插件卸载")
+            if settings.enabled:
+                await self._prepare(settings)
+            elif self._session is not None:
+                old, self._session = self._session, None
+                await old.close()
+            self._settings = settings.model_copy(deep=True)
 
     async def analyse(self, board: Board, settings: EngineSection) -> List[Candidate]:
         async with self.lock:
+            # 排队请求保留棋局难度快照，但不能撤销之后生效的引擎启停、路径或 CPU 设置。
+            runtime_settings = self._settings if self._settings is not None else settings
+            if not runtime_settings.enabled:
+                raise EngineFailure("引擎未启用")
+            session = await self._prepare(runtime_settings)
             try:
-                command = engine_command(settings.executable)
-            except IsolationError as exc:
-                raise EngineFailure(str(exc)) from None
-            return await search(command, board, settings)
+                return await _analyse(session, board, settings)
+            except BaseException:
+                # 包括取消：丢弃未读完的协议流，下次重试重新握手，不自动代走。
+                self._session = None
+                await session.close()
+                raise
+
+    async def close(self) -> None:
+        async with self.lock:
+            self._closed = True
+            if self._session is not None:
+                old, self._session = self._session, None
+                await old.close()

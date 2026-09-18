@@ -9,7 +9,7 @@ import pytest
 
 from xiangqi.config import EngineSection
 from xiangqi.difficulty import LEVELS
-from xiangqi.engine import Engine, EngineFailure, candidates_from_info, search, select_candidates
+from xiangqi.engine import Engine, EngineFailure, candidates_from_info, select_candidates
 from xiangqi.rules import Board, native_move
 
 
@@ -43,7 +43,7 @@ def test_bad_or_incomplete_engine_output_rejected(best, lines):
         candidates_from_info(Board(), lines, best, 1)
 
 
-async def test_global_engine_searches_are_serial(monkeypatch):
+async def test_global_engine_searches_are_serial(monkeypatch, fake_uci):
     active = 0
 
     async def fake_search(*args):
@@ -54,21 +54,25 @@ async def test_global_engine_searches_are_serial(monkeypatch):
         active -= 1
         return []
 
-    monkeypatch.setattr("xiangqi.engine.engine_command", lambda path: ["fake"])
-    monkeypatch.setattr("xiangqi.engine.search", fake_search)
+    monkeypatch.setattr("xiangqi.engine.engine_command", fake_uci)
+    monkeypatch.setattr("xiangqi.engine._analyse", fake_search)
     engine = Engine()
-    await asyncio.gather(*(engine.analyse(Board(), EngineSection()) for _ in range(4)))
+    try:
+        await engine.start(EngineSection())
+        await asyncio.gather(*(engine.analyse(Board(), EngineSection()) for _ in range(4)))
+    finally:
+        await engine.close()
 
 
 async def test_engine_isolation_failure_never_starts_process(monkeypatch):
     from xiangqi.isolation import IsolationError
 
-    def reject(_):
+    def reject(*_):
         raise IsolationError("未隔离")
 
     launch = AsyncMock()
     monkeypatch.setattr("xiangqi.engine.engine_command", reject)
-    monkeypatch.setattr("xiangqi.engine.search", launch)
+    monkeypatch.setattr("xiangqi.engine._analyse", launch)
     with pytest.raises(EngineFailure, match="未隔离"):
         await Engine().analyse(Board(), EngineSection())
     launch.assert_not_called()
@@ -86,34 +90,42 @@ async def test_cancel_kills_and_reaps_engine(monkeypatch):
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
-    task = asyncio.create_task(
-        search([sys.executable, "-c", "import time; time.sleep(30)"], Board(), EngineSection())
+    monkeypatch.setattr(
+        "xiangqi.engine.engine_command", lambda *args: [sys.executable, "-c", "import time; time.sleep(30)"]
     )
+    engine = Engine()
+    task = asyncio.create_task(engine.start(EngineSection()))
     await asyncio.wait_for(created.wait(), 5)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 5)
     assert process.returncode is not None
+    await engine.close()
 
 
 @pytest.mark.skipif(not os.environ.get("XIANGQI_TEST_ENGINE"), reason="可选真实引擎验证")
 @pytest.mark.parametrize("difficulty", LEVELS)
-async def test_real_engine_red_and_black_candidates(difficulty):
+async def test_real_engine_red_and_black_candidates(difficulty, monkeypatch):
+    monkeypatch.setattr("xiangqi.engine.engine_command", lambda *args: [os.environ["XIANGQI_TEST_ENGINE"]])
     board = Board()
-    for _ in range(2):
-        found = await search([os.environ["XIANGQI_TEST_ENGINE"]], board, EngineSection(difficulty=difficulty))
-        assert 1 <= len(found) <= 3
-        assert len({c.choice.move for c in found}) == len(found)
-        if not LEVELS[difficulty].mistake_rate:
-            assert len(found) == 3
-        for c in found:
-            if LEVELS[difficulty].depth:
-                assert c.depth <= LEVELS[difficulty].depth
-            assert c.choice.move in board.legal_moves()
-            future = Board(board.fen)
-            for move in c.pv:
-                future.push(move)
-        board.push(found[-1].choice.move)
+    engine = Engine()
+    try:
+        for _ in range(2):
+            found = await engine.analyse(board, EngineSection(difficulty=difficulty))
+            assert 1 <= len(found) <= 3
+            assert len({c.choice.move for c in found}) == len(found)
+            if not LEVELS[difficulty].mistake_rate:
+                assert len(found) == 3
+            for c in found:
+                if LEVELS[difficulty].depth:
+                    assert c.depth <= LEVELS[difficulty].depth
+                assert c.choice.move in board.legal_moves()
+                future = Board(board.fen)
+                for move in c.pv:
+                    future.push(move)
+            board.push(found[-1].choice.move)
+    finally:
+        await engine.close()
 
 
 @pytest.mark.skipif(not os.environ.get("XIANGQI_TEST_ENGINE"), reason="可选真实引擎验证")
@@ -127,7 +139,12 @@ async def test_real_handicap_excludes_best_move_and_meets_loss_target(difficulty
 
     monkeypatch.setattr("xiangqi.engine.select_candidates", select)
     board = Board()
-    result = await search([os.environ["XIANGQI_TEST_ENGINE"]], board, EngineSection(difficulty=difficulty))
+    monkeypatch.setattr("xiangqi.engine.engine_command", lambda *args: [os.environ["XIANGQI_TEST_ENGINE"]])
+    engine = Engine()
+    try:
+        result = await engine.analyse(board, EngineSection(difficulty=difficulty))
+    finally:
+        await engine.close()
     assert len(evaluated) == len(board.legal_moves())
     assert all(c.score_kind == "cp" for c in result)
     assert all(evaluated[0].score - c.score >= LEVELS[difficulty].min_loss for c in result)

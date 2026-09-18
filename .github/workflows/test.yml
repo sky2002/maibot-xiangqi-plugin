@@ -17,5 +17,3 @@ jobs:
       - run: python -m pytest -q
       - run: ruff check .
       - run: ruff format --check .
-      - run: python scripts/install_engine.py
-      - run: python scripts/run_isolated.py -- python -m pytest -q tests/test_linux_engine.py

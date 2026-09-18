@@ -7,43 +7,17 @@
 
 ![棋盘示例](docs/board.png)
 
-## 安装到 Linux
+## WebUI 一步安装（Linux x86_64）
 
 适配 **MaiBot 1.2.5 系列的新插件运行时、maibot-plugin-sdk 2.8.1、Python 3.12+**。旧版 `BasePlugin` 插件系统不兼容。插件 ID 为 `sky2002.xiangqi`。
 
-先停下 MaiBot，在 **MaiBot 根目录**执行：
+在 MaiBot WebUI 的插件市场安装「LLM 中国象棋」，安装后由宿主自动发现并加载。Python 依赖由宿主根据 `_manifest.json` 安装；插件已包含固定版本的 Linux x86_64 引擎、中文字体及对应许可证，**无需运行任何安装或启动脚本，也无需安装 taskset**。如宿主尚未自动加载，可在插件管理页加载/启用。
 
-```bash
-git clone https://github.com/sky2002/maibot-xiangqi-plugin.git plugins/maibot-xiangqi-plugin
-uv pip install --python .venv/bin/python -r plugins/maibot-xiangqi-plugin/requirements.txt
-```
+首次加载会校验内置引擎的 SHA256，原子复制到 SDK 分配的插件数据目录 `engine/fairy-sf-14-largeboard`，设置执行权限并完成 UCI 握手。此过程完全离线；下载插件和 Python 依赖仍由宿主安装流程联网完成。后续加载复用校验通过的文件，插件升级不会覆盖棋局。
 
-使用 pip 管理环境时，第二行可换为：
+在插件管理页确认「LLM 中国象棋」已加载并启用，并按宿主要求授予 `send.text`、`send.image`、`llm.generate`、`config.get` 能力。宿主 `utils` 任务需要已有可用模型。之后按原方式启动 MaiBot，插件会自动启动引擎并恢复棋局，停机或卸载时自动回收。
 
-```bash
-.venv/bin/python -m pip install -r plugins/maibot-xiangqi-plugin/requirements.txt
-```
-
-依赖必须安装在 **MaiBot 实际运行的 Python 环境**；环境路径不是 `.venv` 时请替换。不要安装到插件自己的虚拟环境后，仍用另一个环境启动宿主。
-
-安装官方引擎，然后通过隔离启动器启动（仍在 MaiBot 根目录）：
-
-```bash
-.venv/bin/python plugins/maibot-xiangqi-plugin/scripts/install_engine.py
-.venv/bin/python plugins/maibot-xiangqi-plugin/scripts/run_isolated.py -- .venv/bin/python bot.py
-```
-
-原来使用 uv 启动时，最后一行可替换为：
-
-```bash
-.venv/bin/python plugins/maibot-xiangqi-plugin/scripts/run_isolated.py -- uv run --no-sync bot.py
-```
-
-如果出现 `FileNotFoundError: ... /snap/bin/uv`，说明启动器未能执行 uv。这个路径可能只是 PATH 搜索的最后一项，不一定表示安装了 Snap 版 uv。只要现有 `.venv` 已装好宿主及插件依赖，就使用上面的 `.venv/bin/python ... -- .venv/bin/python bot.py` 命令，无需安装 uv，也不会失去 CPU 隔离。0.2.1 起会提前检查启动命令，并在无法启动时给出明确提示。
-
-`--` 后面是原来的启动命令和参数；若入口不是 `bot.py`，替换为实际入口。`--no-sync` 避免 uv 清理额外安装的插件依赖。**不要同时保留原来未隔离的 MaiBot 进程。** 安装与启动使用同一 Linux 用户，不需要 sudo。安装器只支持 Linux x86_64，从官方发布下载约 2.5 MB 的固定引擎并核验 SHA256，默认放在 `~/.local/share/maibot-xiangqi/`（遵循 `XDG_DATA_HOME`）。
-
-在插件管理页确认「LLM 中国象棋」已加载并启用，授予其声明的 `send.text`、`send.image`、`llm.generate`、`config.get` 能力。SDK 会生成插件 `config.toml`，默认启用。宿主 `utils` 任务需要已有可用模型。
+加载失败时，日志会报告 CPU、文件完整性或数据目录权限等具体原因；修正后在 WebUI 重新加载即可。数据目录所在文件系统需要允许执行程序。
 
 群内发送：
 
@@ -54,28 +28,22 @@ uv pip install --python .venv/bin/python -r plugins/maibot-xiangqi-plugin/requir
 
 初次启动先发开局图；玩家合法落子后提示思考中，bot 走完后发新棋盘，自动给出使用宿主人设和引擎依据生成的解说。棋手直接说「这步为什么这么走」「你这步有点厉害」即可聊本局，**不需要聊天指令**；普通聊天不会改变棋盘。
 
-### i7-7700 的 CPU 隔离
+### 引擎 CPU 与生命周期
 
-默认 `Threads=1`、64 MB 哈希表、每步搜索上限 800ms、最多 3 个候选；低难度达到深度上限会提前结束。多个群共用串行搜索，不会一群开一个搜索同时抢占 CPU；等待 LLM 时没有后台引擎搜索。64 MB 是哈希表大小，进程总内存会更高。
+默认 `Threads=1`、64 MB 哈希表、每步搜索上限 800ms、最多 3 个候选；低难度达到深度上限会提前结束。多个群共用一个引擎进程和串行搜索，等待 LLM 时引擎不搜索。引擎进程随插件常驻，64 MB 是哈希表大小，进程总内存会更高。
 
-启动器读取 Linux 的 `thread_siblings_list` 和允许使用的 CPU 集合，为引擎预留一个**完整物理核心**，引擎只使用其中一个逻辑 CPU，MaiBot、uv 和插件 runner 继承其余核心的亲和性。正常启用全部核心的 i7-7700 上相当于 MaiBot 使用 3 个物理核心、引擎使用 1 个；不假定逻辑 CPU 编号连续。
+插件在引擎子进程中通过 Python 的亲和性接口，将引擎固定在一个允许使用的逻辑 CPU 上；`engine.cpu = -1` 默认选择允许集合中编号最大的 CPU，也可在插件配置中明确指定。单个可用 CPU 的环境也能运行。**MaiBot 和共享插件 runner 保持原有调度，不再预留或独占整个物理核心**，宿主与其他程序仍可能使用该核心。不依赖旧启动器的环境变量，也不修改父进程亲和性。
 
-只查看分配、不启动：
+内置文件损坏、数据目录不可执行、CPU 不可用或自定义引擎 UCI 不兼容时，插件加载会明确失败。修正后在插件管理页重新加载即可。非 Linux 环境须明确关闭 `[engine] enabled` 使用纯 LLM 模式；引擎故障不会自动降级。
 
-```bash
-.venv/bin/python plugins/maibot-xiangqi-plugin/scripts/run_isolated.py --dry-run
-```
-
-可在 `--` 前加 `--engine-cpu 3` 手动选逻辑 CPU；脚本仍会排除该核心的所有超线程。插件每次搜索前核验 runner 到启动器父链的各线程亲和性，再通过 `taskset` 启动引擎。缺少引擎、缺少 `taskset`（安装 `util-linux`）、核心不足或隔离未生效时明确报错并保留棋局。若存在容器/cgroup CPU 限制，必须允许访问预留核心。
-
-这保证经启动器运行、且未被其他组件改写亲和性的 MaiBot 与引擎不共享物理核心；其他系统进程仍可能使用该核心。引擎候选来自短时搜索，不保证必胜，也不作为正式裁判。
+搜索取消或协议错误后会回收对应进程，保留已保存棋局；下一次「下棋 重试」会重新创建引擎。修改引擎路径或 CPU 时，新引擎握手成功后才替换旧进程；关闭引擎会回收进程，重新启用会自动启动。每次搜索重置引擎的棋局状态，群之间不共享分析上下文。
 
 ### CPU、依赖和字体
 
 - Linux x86_64 可使用 pyffish 发布的 manylinux wheel（需要 glibc 2.27+）。仓库 CI 在 Ubuntu 上验证 Python 3.12、3.13。
-- ARM64 或其他没有匹配 wheel 的系统需要从源码编译 pyffish。Debian/Ubuntu 可先安装 `build-essential` 和匹配当前 Python 版本的开发头文件，再运行依赖安装命令；该平台尚未单独验证。
+- ARM64 或其他没有匹配 wheel 的系统需要从源码编译 pyffish。Debian/Ubuntu 可先安装 `build-essential` 和匹配当前 Python 版本的开发头文件，并自行配置兼容的 `engine.executable`；该平台不属于内置引擎的一步安装范围，尚未单独验证。
 - 内置约 190 KB 的 Noto 中文字体子集，Pillow 直接生成 PNG。无需浏览器、外部画图服务或系统中文字体。
-- 如果启动脚本会执行严格的 `uv sync`，可能清理额外安装的插件依赖。请使用宿主提供的插件依赖管理，或在同步后重新执行上面的插件依赖安装命令。
+- 如果启动脚本会执行严格的 `uv sync`，可能清理额外安装的插件依赖。请使用宿主提供的插件依赖管理，以补齐清单声明的依赖。
 
 ## 指令
 
@@ -121,7 +89,7 @@ uv pip install --python .venv/bin/python -r plugins/maibot-xiangqi-plugin/requir
 | 5 | 挑战 | 6 | 保留引擎靠前的候选，不主动制造失误 |
 | 6 | 超人类（原挑战的搜索方式） | 不额外限制深度 | 保留引擎靠前的候选，不主动制造失误 |
 
-六档是相对对弈难度，不是经标定的人类水平。「超人类」是档位名称，沿用原挑战的搜索方式，不代表启用 NNUE、无限计算或经过真人棋力认证。更高档允许搜索更深，但具体局面、机器速度、时间预算和 LLM 的选择都会影响实际表现，不保证每一步都比低档好，也不保证入门档适合所有初学者。深度指引擎的搜索迭代深度，不能直接理解为完整算清这么多回合。所有档位仍受 `engine.movetime_ms` 上限约束，不会突破单核隔离或增加搜索线程。
+六档是相对对弈难度，不是经标定的人类水平。「超人类」是档位名称，沿用原挑战的搜索方式，不代表启用 NNUE、无限计算或经过真人棋力认证。更高档允许搜索更深，但具体局面、机器速度、时间预算和 LLM 的选择都会影响实际表现，不保证每一步都比低档好，也不保证入门档适合所有初学者。深度指引擎的搜索迭代深度，不能直接理解为完整算清这么多回合。所有档位仍受 `engine.movetime_ms` 上限约束，不会解除引擎绑核或增加搜索线程。
 
 入门至困难在对应深度上评估全部合法走法，再以表中概率尝试组成较弱的候选池。在这样的回合，最优招被排除，LLM 即使挑选池里最好的一步，也不能恢复到原来的最优着法。可能出现漏防、错过得子或错过杀棋，而不只是少算几层。入门/简单的机制从 0.3.1 引入，标准/困难从 0.3.2 引入。
 
@@ -165,7 +133,8 @@ uv pip install --python .venv/bin/python -r plugins/maibot-xiangqi-plugin/requir
 | --- | --- | --- |
 | `enabled` | `true` | 混合模式；明确设为 `false` 才使用旧纯 LLM 模式 |
 | `difficulty` | `3` | 新局默认难度 1–6；已有棋局保持已保存的难度 |
-| `executable` | `""` | 留空用安装器路径；可指定绝对路径的兼容 Fairy-Stockfish largeboard |
+| `executable` | `""` | 留空自动准备并使用内置引擎；可指定绝对路径的兼容 Fairy-Stockfish largeboard |
+| `cpu` | `-1` | 引擎逻辑 CPU；-1 自动选择允许集合的最大编号，不限制宿主调度 |
 | `candidates` | `3` | 交给 LLM 的候选数，1–5，合法走法不足时减少 |
 | `movetime_ms` | `800` | 搜索毫秒数，100–3000；不包含排队、进程启动与 LLM 请求 |
 | `hash_mb` | `64` | 哈希表大小，16–256 MB |
@@ -216,20 +185,13 @@ move_timeout = 120
 
 ## 更新
 
-停下 MaiBot 后，在根目录执行：
+在 WebUI 更新插件并重新加载即可。0.4.1 起引擎直接随插件分发，`install_engine.py` 已移除；新用户无需先装引擎，旧用户也不用再次运行脚本。
 
-```bash
-git -C plugins/maibot-xiangqi-plugin pull --ff-only
-uv pip install --python .venv/bin/python -r plugins/maibot-xiangqi-plugin/requirements.txt
-```
+如果仍使用 0.3.x 的 `run_isolated.py -- ...` 启动命令，将其换为正常的 `.venv/bin/python bot.py` 或 `uv run --no-sync bot.py`。插件不再为引擎独占物理核心，MaiBot 保持正常 CPU 调度。所有改动限于插件，不需要修改 MaiBot 主程序。
 
-从 0.1.x 升级到 0.2.0 后默认启用引擎：还需执行上面的 `install_engine.py`，并通过 `run_isolated.py` 重启。若暂时沿用旧模式，明确设置 `[engine] enabled = false`。插件运行数据位于 SDK 的数据目录，更新源码不会覆盖存档。
+已有配置缺省使用 `engine.cpu = -1`，`engine.executable = ""` 自动使用插件数据目录的内置引擎；显式配置的自定义路径保持不变，不会自动覆盖。无需覆盖配置文件或手动修改配置版本。
 
-从 0.2.x 升级到 0.3.0 不需要重新安装引擎或额外依赖，拉取代码后按原隔离命令重启即可。新局默认标准档，旧棋局按挑战档继续；可用「下棋 难度」查看或调整。
-
-从 0.3.0 升级到 0.3.1 同样只需拉取代码并重启。已保存为入门/简单的棋局自动使用新的降强策略；新局默认仍是标准，请用「下棋 开始 简单」或「下棋 难度 简单」选择低档。
-
-0.3.2 将简单、标准、困难、挑战的搜索深度上限分别降为 1、2、4、6，为标准、困难加入递减的失误机制，并新增第 6 档「超人类」沿用原挑战的搜索方式。拉取更新并重启后，已有棋局会按保存的档位使用新策略，无需重新开局或安装引擎。
+棋局存档和六档难度策略保持兼容，运行数据位于 SDK 的数据目录，更新源码不会覆盖。无难度字段的旧存档继续采用第 6 档；可通过「下棋 难度」查看或调整。
 
 ## 开发验证
 
@@ -241,12 +203,12 @@ uv run pytest -q
 uv run ruff check .
 ```
 
-测试使用真实 pyffish 和 Pillow，LLM/群消息接口使用可控替身；包括走法、裁判、权限、重复消息、重试、悔棋、群隔离、候选约束、自动聊天、迟到回复、SDK 入口和中文 PNG。Linux CI 另外安装真实引擎，经隔离启动器验证子进程与宿主亲和性及红黑候选搜索。真实聊天平台和模型服务需要安装后联调。
+测试使用真实 pyffish 和 Pillow，LLM/群消息接口使用可控替身；包括走法、裁判、权限、重复消息、重试、悔棋、群隔离、候选约束、自动聊天、迟到回复、SDK 入口和中文 PNG。生命周期测试使用真实 Python 子进程模拟 UCI，覆盖启动、复用、重载、取消、崩溃和失败清理。Linux CI 不执行安装脚本，直接从全新的临时数据目录启动内置引擎，验证 SDK 加载、引擎绑核、宿主亲和性不变及红黑候选搜索。真实聊天平台和模型服务需要安装后联调。
 
 ## 开源组件
 
 - [pyffish / Fairy-Stockfish](https://github.com/fairy-stockfish/Fairy-Stockfish)：规则绑定，GPL-3.0-or-later；使用的 [0.0.90 源码发布](https://pypi.org/project/pyffish/0.0.90/#files)。
-- [Fairy-Stockfish 14 largeboard](https://github.com/fairy-stockfish/Fairy-Stockfish/releases/tag/fairy_sf_14)：独立 UCI 引擎，单线程、关闭 NNUE；安装器直连官方二进制，[对应源码](https://github.com/fairy-stockfish/Fairy-Stockfish/tree/fairy_sf_14)。
+- [Fairy-Stockfish 14 largeboard](https://github.com/fairy-stockfish/Fairy-Stockfish/releases/tag/fairy_sf_14)：独立 UCI 引擎，单线程、关闭 NNUE；随插件分发官方二进制、[对应源码归档](xiangqi/assets/fairy-stockfish-14-source.tar.gz)及 GPL 许可证，见[资源说明](xiangqi/assets/README.md)。
 - [Pillow](https://github.com/python-pillow/Pillow)：棋盘绘制，HPND。
 - [maibot-plugin-sdk](https://github.com/Mai-with-u/maibot-plugin-sdk)：插件协议和宿主能力调用。
 - [Noto CJK](https://github.com/notofonts/noto-cjk)：中文字体，SIL OFL 1.1；子集更名为 MaiBotXiangqi，见 [字体说明](xiangqi/assets/README.md)。

@@ -1,42 +1,59 @@
 from pathlib import Path
+from unittest.mock import Mock
+
+import os
+import sys
 
 import pytest
 
-from xiangqi.isolation import IsolationError, cpu_set, plan, topology
+from xiangqi.isolation import IsolationError, engine_command
 
 
-def test_reserve_physical_core_including_non_adjacent_smt():
-    siblings = {i: {i % 4, i % 4 + 4} for i in range(8)}
-    chosen = plan(set(range(8)), siblings)
-    assert chosen.engine_cpu == 3
-    assert chosen.reserved == {3, 7}
-    assert chosen.host == {0, 1, 2, 4, 5, 6}
-    assert chosen.host.isdisjoint(chosen.reserved)
+@pytest.fixture
+def cpu_environment(monkeypatch, tmp_path):
+    path = tmp_path / "engine"
+    path.touch()
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {2, 5}, raising=False)
+    monkeypatch.setattr(os, "sched_setaffinity", Mock(), raising=False)
+    monkeypatch.setattr(os, "access", lambda *args: True)
+    monkeypatch.delenv("MAIBOT_XIANGQI_ENGINE_CPU", raising=False)
+    monkeypatch.delenv("MAIBOT_XIANGQI_HOST_PID", raising=False)
+    return path
 
 
-def test_restricted_mask_and_explicit_cpu():
-    siblings = {2: {2, 10}, 5: {5, 13}, 13: {5, 13}}
-    chosen = plan({2, 5, 13}, siblings, 13)
-    assert chosen.host == {2} and chosen.reserved == {5, 13}
-    with pytest.raises(IsolationError):
-        plan({2, 5, 13}, siblings, 0)
+def test_normal_launch_needs_no_launcher_and_never_changes_host(cpu_environment):
+    assert engine_command(str(cpu_environment)) == [
+        sys.executable,
+        str(Path(__file__).resolve().parents[1] / "xiangqi/engine_worker.py"),
+        "5",
+        str(cpu_environment.resolve()),
+    ]
+    assert engine_command(str(cpu_environment), 2)[2] == "2"
+    os.sched_setaffinity.assert_not_called()
 
 
-def test_single_physical_core_rejected_even_with_two_threads():
-    with pytest.raises(IsolationError, match="两个"):
-        plan({0, 1}, {0: {0, 1}, 1: {0, 1}})
+def test_single_allowed_cpu_is_supported(cpu_environment, monkeypatch):
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {3})
+    assert engine_command(str(cpu_environment))[2] == "3"
 
 
-def test_read_linux_topology(tmp_path):
-    directory = tmp_path / "cpu2/topology"
-    directory.mkdir(parents=True)
-    (directory / "thread_siblings_list").write_text("2,10\n")
-    assert topology({2}, tmp_path) == {2: {2, 10}}
-    with pytest.raises(OSError):
-        topology({3}, Path(tmp_path))
+def test_invalid_cpu_fails_before_launch(cpu_environment):
+    with pytest.raises(IsolationError, match="engine.cpu"):
+        engine_command(str(cpu_environment), 0)
 
 
-@pytest.mark.parametrize("text", ["", "1-0", "-1", "0-1-2", "1;2", "1,", "999999"])
-def test_invalid_cpu_lists_fail_closed(text):
-    with pytest.raises(IsolationError):
-        cpu_set(text)
+def test_no_system_tool_required(cpu_environment, monkeypatch):
+    monkeypatch.setenv("PATH", "")
+    assert engine_command(str(cpu_environment))[0] == sys.executable
+
+
+def test_missing_engine_is_actionable(cpu_environment):
+    with pytest.raises(IsolationError, match="engine.executable"):
+        engine_command(str(cpu_environment) + "missing")
+
+
+def test_unsupported_platform_is_explicit(cpu_environment, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    with pytest.raises(IsolationError, match="Linux"):
+        engine_command(str(cpu_environment))

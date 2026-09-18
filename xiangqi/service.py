@@ -47,7 +47,7 @@ class Service:
         self.ctx = ctx
         self.settings = settings
         self.engine_settings = engine_settings or EngineSection()
-        self.engine = Engine()
+        self.engine = Engine(data_dir)
         self.analysis: Dict[str, Tuple[str, Tuple[str, ...], Dict[str, Any]]] = {}
         self.chat_last: Dict[str, float] = {}
         self.chat_busy: Set[str] = set()
@@ -60,6 +60,9 @@ class Service:
         self.sweeper: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
+        if self.sweeper is not None:
+            return
+        await self.engine.start(self.engine_settings)
         # 启动时验证保存的棋谱；损坏的数据库应暴露错误，不能偷偷重置。
         for game in self.store.all():
             game.position()
@@ -73,7 +76,16 @@ class Service:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        self.store.close()
+        try:
+            await self.engine.close()
+        finally:
+            self.store.close()
+
+    async def configure(self, settings: ChessSection, engine_settings: EngineSection) -> None:
+        # 引擎配置校验成功后再发布，失败保留原来的运行配置。
+        await self.engine.start(engine_settings)
+        self.settings = settings
+        self.engine_settings = engine_settings
 
     def _same(self, snapshot: Game) -> bool:
         current = self.store.get(snapshot.stream_id)
