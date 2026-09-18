@@ -50,7 +50,7 @@ async def test_real_isolated_engine_search(difficulty, monkeypatch):
     for _ in range(2):
         result = await engine.analyse(board, EngineSection(difficulty=difficulty))
         assert 1 <= len(result) <= 3 and all(c.choice.move in board.legal_moves() for c in result)
-        if difficulty >= 3:
+        if not LEVELS[difficulty].mistake_rate:
             assert len(result) == 3
         else:
             assert len(evaluated) == len(board.legal_moves())

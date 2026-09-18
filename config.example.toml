@@ -1,6 +1,6 @@
 [plugin]
 enabled = true
-config_version = "0.3.0"
+config_version = "0.3.2"
 
 [chess]
 # 宿主 model_config.toml 中已配置的模型名称，留空使用 utils。
@@ -21,7 +21,7 @@ admins = []
 # 默认启用：需要安装引擎，并经 run_isolated.py 启动 MaiBot。
 # 设为 false 可明确使用旧的纯 LLM 模式；引擎故障不会自动降级。
 enabled = true
-# 新棋局默认难度：1入门、2简单、3标准、4困难、5挑战；不是真人等级分。
+# 新棋局默认难度：1入门、2简单、3标准、4困难、5挑战、6超人类；名称不是等级认证。
 difficulty = 3
 executable = ""
 candidates = 3

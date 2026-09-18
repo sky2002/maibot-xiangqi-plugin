@@ -1,6 +1,6 @@
 [project]
 name = "maibot-xiangqi-plugin"
-version = "0.3.1"
+version = "0.3.2"
 description = "让群友通过棋谱、坐标和自然语言与 MaiBot 的 LLM 下中国象棋"
 requires-python = ">=3.12"
 license = "GPL-3.0-or-later"

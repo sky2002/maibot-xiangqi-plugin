@@ -104,7 +104,7 @@ async def test_real_engine_red_and_black_candidates(difficulty):
         found = await search([os.environ["XIANGQI_TEST_ENGINE"]], board, EngineSection(difficulty=difficulty))
         assert 1 <= len(found) <= 3
         assert len({c.choice.move for c in found}) == len(found)
-        if difficulty >= 3:
+        if not LEVELS[difficulty].mistake_rate:
             assert len(found) == 3
         for c in found:
             if LEVELS[difficulty].depth:
@@ -117,8 +117,8 @@ async def test_real_engine_red_and_black_candidates(difficulty):
 
 
 @pytest.mark.skipif(not os.environ.get("XIANGQI_TEST_ENGINE"), reason="可选真实引擎验证")
-@pytest.mark.parametrize("difficulty", [1, 2])
-async def test_real_handicap_can_offer_candidates_outside_old_top_three(difficulty, monkeypatch):
+@pytest.mark.parametrize("difficulty", [1, 2, 3, 4])
+async def test_real_handicap_excludes_best_move_and_meets_loss_target(difficulty, monkeypatch):
     evaluated = []
 
     def select(ranked, settings):
@@ -131,4 +131,6 @@ async def test_real_handicap_can_offer_candidates_outside_old_top_three(difficul
     assert len(evaluated) == len(board.legal_moves())
     assert all(c.score_kind == "cp" for c in result)
     assert all(evaluated[0].score - c.score >= LEVELS[difficulty].min_loss for c in result)
-    assert not {c.choice.move for c in result} & {c.choice.move for c in evaluated[:3]}
+    assert evaluated[0].choice.move not in {c.choice.move for c in result}
+    if difficulty <= 2:
+        assert not {c.choice.move for c in result} & {c.choice.move for c in evaluated[:3]}

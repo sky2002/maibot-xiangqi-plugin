@@ -145,7 +145,7 @@ async def search(command: List[str], board: Board, settings: EngineSection) -> L
                 raise EngineFailure("引擎未包含象棋规则，请使用 largeboard 版本")
             spec = LEVELS[settings.difficulty]
             legal_count = len(board.legal_moves())
-            # 低档必须评估最佳三招之外的着法，否则 LLM 总能从好棋里挑回强招。
+            # 有失误机制的档位必须评估最佳三招之外的着法，否则 LLM 总能挑回强招。
             count = legal_count if spec.mistake_rate else min(settings.candidates, legal_count)
             if not count:
                 raise EngineFailure("当前局面没有合法着法")

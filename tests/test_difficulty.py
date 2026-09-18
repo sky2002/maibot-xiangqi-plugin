@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from xiangqi.config import EngineSection
 from xiangqi.difficulty import opening
 from xiangqi.engine import Candidate
 from xiangqi.store import Store
@@ -26,13 +27,14 @@ def said(service):
         ("开始 困难 红方", (True, 4)),
         ("开始 1", (True, 1)),
         ("开始 黑方 5", (False, 5)),
+        ("开始 超人类", (True, 6)),
     ],
 )
 def test_opening_color_and_difficulty(text, result):
     assert opening(text, 3) == result
 
 
-@pytest.mark.parametrize("text", ["开始 黑 红", "开始 6", "开始 简单 困难", "开始 新手", "开始 红 1 多余"])
+@pytest.mark.parametrize("text", ["开始 黑 红", "开始 7", "开始 简单 困难", "开始 新手", "开始 红 1 多余"])
 def test_bad_opening_never_silently_chooses_a_level(text):
     with pytest.raises(ValueError):
         opening(text, 3)
@@ -62,7 +64,7 @@ async def test_old_save_preserves_pre_upgrade_search_mode(service):
     data.pop("difficulty")
     with service.store.db:
         service.store.db.execute("UPDATE games SET data=? WHERE stream_id='s1'", (json.dumps(data),))
-    assert service.store.get("s1").difficulty == 5
+    assert service.store.get("s1").difficulty == 6
 
 
 async def test_difficulty_view_and_owner_only_changes_do_not_move_or_extend_timer(service):
@@ -82,7 +84,7 @@ async def test_difficulty_view_and_owner_only_changes_do_not_move_or_extend_time
     service.ctx.llm.generate.assert_not_called()
 
 
-@pytest.mark.parametrize("text", ["难度 0", "难度 6", "难度 简单 多余", "难度 2.5"])
+@pytest.mark.parametrize("text", ["难度 0", "难度 7", "难度 简单 多余", "难度 2.5"])
 async def test_bad_level_does_not_change_game_or_call_llm(service, text):
     service.engine_settings.enabled = True
     await command(service, "开始")
@@ -121,3 +123,18 @@ async def test_pure_llm_reports_no_engine_difficulty(service):
     await command(service, "难度 1")
     assert "纯 LLM" in said(service)
     assert service.store.get("s1") == before
+
+
+async def test_superhuman_can_be_set_by_owner_and_saved_without_changing_old_challenge(service, tmp_path):
+    service.engine_settings = EngineSection(difficulty=6)
+    await command(service, "开始")
+    assert service.store.get("s1").difficulty == 6
+    await command(service, "开始 挑战", stream="s2", group="g2")
+    await command(service, "难度 困难")
+    await command(service, "难度 超人类")
+    reopened = Store(tmp_path / "xiangqi.sqlite3")
+    try:
+        assert reopened.get("s1").difficulty == 6
+        assert reopened.get("s2").difficulty == 5
+    finally:
+        reopened.close()

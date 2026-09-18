@@ -14,7 +14,7 @@ def ranked(scores):
     return [Candidate(c, kind, score, 1, [c.move]) for c, (kind, score) in zip(choices, scores, strict=False)]
 
 
-@pytest.mark.parametrize("level,min_loss,max_loss", [(1, 100, 600), (2, 50, 300)])
+@pytest.mark.parametrize("level,min_loss,max_loss", [(1, 100, 600), (2, 50, 300), (3, 25, 150), (4, 10, 80)])
 def test_mistake_pool_excludes_good_moves_even_for_perfect_llm(level, min_loss, max_loss):
     pool = ranked([("cp", v) for v in (100, 99, 98, 50, 0, -50, -150, -200, -400, -500, -900)])
     result = select_candidates(pool, EngineSection(difficulty=level), random.Random(1))
@@ -29,8 +29,8 @@ def test_beginner_can_make_larger_mistakes_than_easy():
     assert select_candidates(pool, EngineSection(difficulty=2), random.Random(1)) == pool
 
 
-@pytest.mark.parametrize("level", [3, 4, 5])
-def test_standard_and_above_keep_exact_original_candidates(level):
+@pytest.mark.parametrize("level", [5, 6])
+def test_challenge_and_superhuman_keep_exact_original_candidates(level):
     pool = ranked([("cp", v) for v in (100, 98, 95, 0, -100)])
     for seed in range(20):
         assert select_candidates(pool, EngineSection(difficulty=level), random.Random(seed)) == pool[:3]
@@ -53,16 +53,18 @@ def test_mate_scores_are_not_treated_as_centipawns():
 
 
 def test_handicap_occurs_often_without_becoming_every_move():
-    pool = ranked([("cp", v) for v in (100, 99, 98, 0, -20, -40)])
+    pool = ranked([("cp", v) for v in (100, 99, 98, 50, 0, -20, -40)])
     counts = {}
-    for level in (1, 2):
+    for level in (1, 2, 3, 4):
         rng = random.Random(2026)
         counts[level] = sum(
-            select_candidates(pool, EngineSection(difficulty=level), rng)[0].score <= 0 for _ in range(1000)
+            select_candidates(pool, EngineSection(difficulty=level), rng)[0].score < 98 for _ in range(1000)
         )
     assert 780 < counts[1] < 920
     assert 520 < counts[2] < 680
-    assert counts[1] > counts[2]
+    assert 230 < counts[3] < 370
+    assert 90 < counts[4] < 210
+    assert counts[1] > counts[2] > counts[3] > counts[4]
 
 
 async def test_llm_cannot_recover_excluded_best_move(service):

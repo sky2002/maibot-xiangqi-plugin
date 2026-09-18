@@ -5,7 +5,7 @@ from maibot_sdk import Field, PluginConfigBase
 
 class PluginSection(PluginConfigBase):
     enabled: bool = Field(default=True, description="启用中国象棋插件")
-    config_version: str = Field(default="0.3.0", description="配置版本")
+    config_version: str = Field(default="0.3.2", description="配置版本")
 
 
 class ChessSection(PluginConfigBase):
@@ -28,7 +28,10 @@ class ChessSection(PluginConfigBase):
 class EngineSection(PluginConfigBase):
     enabled: bool = Field(default=True, description="引擎给候选、LLM 拍板；关闭后使用原纯 LLM 模式")
     difficulty: int = Field(
-        default=3, ge=1, le=5, description="新局默认难度：1入门、2简单、3标准、4困难、5挑战；不是等级分"
+        default=3,
+        ge=1,
+        le=6,
+        description="新局默认难度：1入门、2简单、3标准、4困难、5挑战、6超人类；名称不是等级认证",
     )
     executable: str = Field(default="", description="Fairy-Stockfish largeboard 路径，留空使用安装器默认位置")
     candidates: int = Field(default=3, ge=1, le=5, description="交给 LLM 的引擎候选数")

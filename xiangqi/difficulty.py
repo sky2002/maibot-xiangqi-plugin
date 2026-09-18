@@ -1,4 +1,4 @@
-"""低档结合浅搜索和受控失误分档，不映射真人等级分。"""
+"""结合搜索深度和受控失误分档，不映射真人等级分。"""
 
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -15,10 +15,11 @@ class Difficulty:
 
 LEVELS = {
     1: Difficulty("入门", 1, 0.85, 100, 600),
-    2: Difficulty("简单", 2, 0.60, 50, 300),
-    3: Difficulty("标准", 6),
-    4: Difficulty("困难", 10),
-    5: Difficulty("挑战", 0),
+    2: Difficulty("简单", 1, 0.60, 50, 300),
+    3: Difficulty("标准", 2, 0.30, 25, 150),
+    4: Difficulty("困难", 4, 0.15, 10, 80),
+    5: Difficulty("挑战", 6),
+    6: Difficulty("超人类", 0),
 }
 
 
@@ -34,7 +35,7 @@ def opening(command: str, default: int) -> Tuple[bool, int]:
     """接受「开始 [红|黑] [难度]」，颜色与难度也可交换顺序。"""
     tokens = command.split()
     if not tokens or tokens[0] != "开始" or len(tokens) > 3:
-        raise ValueError("请使用「下棋 开始 [红|黑] [1–5或难度名]」，例如「下棋 开始 黑 简单」。")
+        raise ValueError("请使用「下棋 开始 [红|黑] [1–6或难度名]」，例如「下棋 开始 黑 简单」。")
     color, level = None, None
     for token in tokens[1:]:
         if token in ("红", "黑", "红方", "黑方") and color is None:
